@@ -1,0 +1,1304 @@
+/*
+  G-LOC Motion Platform Controller - Version 41
+  ------------------------------------------------
+  Developed for a custom-built motion platform replicating the seat motion of 
+  Sega’s G-LOC arcade cabinet. This Arduino Mega 2560 code interfaces with a pair
+  of DC motors using rotary encoders, limit switches, and PID control to simulate 
+  pitch and roll motion during gameplay.
+
+  LICENSE & USAGE
+  ------------------------------
+  This code is released for **personal, educational, and non-commercial use only**.
+  You are free to modify and share this code for non-commercial purposes, provided that
+  you retain this notice and credit the original author (Luke McMillan) in any derivatives.
+  Commercial use, distribution, or sale of this software or derivative works is **NOT PERMITTED**
+  without written permission from the author.
+  See LICENSE.txt for full terms.
+
+  CITATION
+  ------------------------------
+  If you use or build upon this project, please credit the original author:
+    Luke McMillan (github.com/[your-github-username])
+  and link back to the GitHub repository.
+
+  DISCLAIMER – USE AT YOUR OWN RISK
+  ---------------------------------------------
+  This software is provided "as is" and WITHOUT ANY WARRANTY of any kind, express or implied.
+  Working with high-powered motors and mains-powered devices is inherently dangerous.
+  You are solely responsible for your own safety and any damage, injury, or loss resulting
+  from the use or misuse of this software or associated hardware. By using this code,
+  you agree to accept all risks and liabilities.
+
+  CURRENTLY WORKING FEATURES:
+  ------------------------------
+  • Calibration on startup using limit switches and encoder readings
+  • Live motor position tracking (mapped 1–32 scale)
+  • PID-controlled movement based on target positions from MAME Hooker
+  • Test Mode with manual control and OLED feedback
+  • Serial timeout fallback to neutral position
+  • Relay control for `start_lamp` and `danger_lamp` signals from MAME Hooker
+  • OLED screen showing:
+     - Target and mapped positions
+     - PID output
+     - Motor movement status
+     - PWM values sent to each motor
+     - Serial connection status
+     - Lamp relay states (ON/OFF)
+
+  EXPECTED SERIAL COMMANDS FROM MAMEHOOKER:
+  --------------------------------------------
+  • Q##   - Set left motor target position
+  • R##   - Set right motor target position
+  • S##   - Set left motor speed scalar (1–7)
+  • T##   - Set right motor speed scalar (1–7)
+  • A0/1  - Toggle `start_lamp` relay OFF/ON
+  • B0/1  - Toggle `danger_lamp` relay OFF/ON
+  • All commands must end with 'x' as delimiter
+
+  TEST MODE:
+  -------------
+  • Triggered at startup via dedicated switch
+  • Allows manual forward/reverse motor testing
+  • OLED shows button states, encoder values, and limit switch status
+
+  New Features in V41
+  ----------------------------
+  • The Emergency Stop Systems have been implemented but not working correctly - use at your own risk. 
+
+  Author: Luke McMillan
+  bertybeatle@gmail.com
+  Date: June 2025
+*/
+
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include <PID_v1.h>
+#include <EEPROM.h>
+
+// --------- PIN ASSIGNMENTS ---------
+#define TFT_CS    22
+#define TFT_DC    26
+#define TFT_RST   24
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
+
+// ----------Settings Mode Variables to be Stored in EPROM-------------
+#define ADDR_KpQ 0
+#define ADDR_KiQ 4
+#define ADDR_KdQ 8
+#define ADDR_KpR 12
+#define ADDR_KiR 16
+#define ADDR_KdR 20
+#define ADDR_minPWMQ 24
+#define ADDR_maxPWMQ 28
+#define ADDR_minPWMR 32
+#define ADDR_maxPWMR 36
+#define ADDR_emergencyStop 40
+#define ADDR_boundarySensorEnabled 50
+#define ADDR_cabinEStopEnabled 51
+
+//Helpers for Settings Mode
+void saveSettings();
+void loadSettings();
+
+//Access to Settings Mode
+const int settingsModeSwitchPin = 6;  // New settings switch
+
+//Variables for Settings Mode
+float minPWMQ = 80, maxPWMQ = 255;
+float minPWMR = 80, maxPWMR = 255;
+
+// Also KpR, KiR, KdR if you want them separate from Q
+float KpR = 22.0, KiR = 3.5, KdR = 0.6; // etc
+
+// For cursor tracking in Test Mode
+const int numSettings = 13; // 5 per motor + emergency toggle
+int cursorPos = 0;
+
+//Left Motor Setup
+const int motorQDirectionPin = 10;  // Left motor DIR
+const int motorQSpeedPin     = 8;   // Left motor PWM
+const int motorQLowerLimitPin = 3;
+const int motorQUpperLimitPin = 2;
+const int potMotorQPin = A0; // Not used in this version of the program,
+const int motorQEnablePin = 12;     // Enable pin for Left motor (active LOW)
+
+//Right Motor Setup
+const int motorRDirectionPin = 11;  // Right motor DIR
+const int motorRSpeedPin     = 9;   // Right motor PWM
+const int motorRLowerLimitPin = 5;
+const int motorRUpperLimitPin = 4;
+const int potMotorRPin = A1; // Not used in this version of the program
+const int motorREnablePin = 13;     // Enable pin for Right motor (active LOW)
+
+//Rotary Encoder Setup
+long encoderQMin = 0, encoderQMax = 0;
+long encoderRMin = 0, encoderRMax = 0;
+bool calibrationSuccessful = false;
+
+//Booleans for the lamps
+bool startLampState = false;
+bool dangerLampState = false;
+
+//Lamp assignments
+const int startLampRelayPin = 40;   
+const int dangerLampRelayPin = 41;  
+
+//Emergenc Stop Code variables - not the generic emergencyStopEnabled and emergencyStopActive are not actively used in v41. 
+bool emergencyStopEnabled = false;  
+bool emergencyStopActive = false;
+bool boundarySensorEnabled = true;
+bool cabinEStopEnabled = true;
+bool eStopLatched = false;          // Set true after E-Stop, false after recovery
+bool waitForStartLamp = false;      // Set true after E-Stop, cleared after A1/StartLamp is triggered
+bool boundaryActive = false;        // Set true if handling boundary recovery
+// For detecting motion activity:
+bool motionActive = false;
+
+//Emergency Stop Pins
+const int estopButtonPin = 25;      // E-stop button in cabin
+const int boundarySensorPin = 27; // Use digital pin 27 for boundary sensor
+
+// PID variables
+double inputQ, outputQ, setpointQ;
+double inputR, outputR, setpointR;
+
+// PID tuning parameters (adjust as needed)
+double Kp = 2.0, Ki = 0.5, Kd = 0.1;
+
+// PID instances
+PID pidQ(&inputQ, &outputQ, &setpointQ, Kp, Ki, Kd, DIRECT);
+PID pidR(&inputR, &outputR, &setpointR, Kp, Ki, Kd, DIRECT);
+
+//Helper Function for Motor Polarity
+bool getCorrectedDirection(bool moveUp, bool isReversed) {
+  return isReversed ? !moveUp : moveUp;
+}
+
+#define DEBUG false  // Enables/disables debug output
+
+int motorPosQ = 16;
+int motorPosR = 16;
+int motorSpeedQ = 1;
+int motorSpeedR = 1;
+
+unsigned long lastSerialDataTime = 0;
+const unsigned long serialTimeout = 5000;  // 5 second timeout
+
+// Test & Setting Mode pins
+const int testModeSwitchPin   = 14;
+const int testLeftFwdPin      = 15;
+const int testLeftRevPin      = 31;
+const int testRightFwdPin     = 17;
+const int testRightRevPin     = 34;
+const int testSpeedButtonPin  = 33;
+
+// Add if missing
+bool motorQPolarityReversed = false;
+bool motorRPolarityReversed = false;
+
+//Rotary Encoder Directions
+volatile bool encoderQDirectionForward = true;
+volatile bool encoderRDirectionForward = true;
+
+//Rotary Encoder Positions
+volatile long encoderQPosition = 0;
+volatile long encoderRPosition = 0;
+
+float rpmLeft = 0;
+float rpmRight = 0;
+
+//Motor Encoder Wheels
+const int encoderQPinA = 18;  // Left motor (Q) - Signal A
+const int encoderQPinB = 19;  // Left motor (Q) - Signal B
+const int encoderRPinA = 20;  // Right motor (R) - Signal A
+const int encoderRPinB = 21;  // Right motor (R) - Signal B
+
+const int EEPROM_RPM_LEFT_ADDR = 8;
+const int EEPROM_RPM_RIGHT_ADDR = 12;
+
+const bool DIR_FORWARD = true;
+const bool DIR_REVERSE = false;
+
+// --------- GLOBALS ---------
+unsigned long lastDisplayUpdate = 0;
+const unsigned long displayUpdateInterval = 200;  // ms
+
+int testSpeedSetting = 4; // Start at mid-speed (1-7)
+bool emergencyStopActivated = false;
+String lastLines[16];
+
+// --------- OLED HELPER ---------
+void drawLine(int line, const String &text) {
+  int y = line * 8;
+  if (text != lastLines[line]) {
+    tft.fillRect(0, y, 160, 8, ST7735_BLACK);
+    tft.setCursor(0, y);
+    tft.print(text);
+    lastLines[line] = text;
+  }
+}
+void clearAllLines() {
+  for (int i = 0; i < 16; ++i) {
+    lastLines[i] = "";
+    tft.fillRect(0, i * 8, 160, 8, ST7735_BLACK);
+  }
+}
+
+//Motor Encoder Wheels
+void countEncoderQ() {
+  bool bState = digitalRead(encoderQPinB);
+  encoderQDirectionForward = !bState;  // true = forward, false = reverse
+  encoderQPosition += encoderQDirectionForward ? 1 : -1;
+}
+
+void countEncoderR() {
+  bool bState = digitalRead(encoderRPinB);
+  encoderRDirectionForward = !bState;
+  encoderRPosition += encoderRDirectionForward ? 1 : -1;
+}
+
+// --------- DEBOUNCE HELPER ---------
+bool debounceRead(int pin) {
+  static unsigned long lastDebounce[40] = {0};
+  static bool lastState[40] = {HIGH};
+  int idx = pin;
+  bool reading = digitalRead(pin);
+
+  if (reading != lastState[idx]) {
+    lastDebounce[idx] = millis();
+  }
+  if ((millis() - lastDebounce[idx]) > 5) {
+    lastState[idx] = reading;
+  }
+  return lastState[idx] == LOW;
+}
+
+// --------- BASIC MOTOR CONTROL ---------
+void stopMotor(int speedPin) {
+  analogWrite(speedPin, 0);
+}
+void moveMotor(int dirPin, bool direction, int speedPercent, int speedPin) {
+  digitalWrite(dirPin, direction ? HIGH : LOW);
+  int pwmValue = map(constrain(speedPercent, 0, 100), 0, 100, 0, 255);
+  analogWrite(speedPin, pwmValue);
+}
+void incrementTestSpeed() {
+  testSpeedSetting++;
+  if (testSpeedSetting > 7) testSpeedSetting = 1;
+}
+
+//New feature designed to prevent motors pressing up against the limits. 
+void safeMoveMotorPWM(
+  int dirPin,
+  int speedPWM,
+  bool direction,      // true = forward (up), false = reverse (down)
+  int speedPin,
+  int upperLimitPin,
+  int lowerLimitPin
+) {
+  // Check limits BEFORE moving
+  if (direction) { // Moving UP
+    if (digitalRead(upperLimitPin) == HIGH) {
+      stopMotor(speedPin);
+      return;
+    }
+  } else { // Moving DOWN
+    if (digitalRead(lowerLimitPin) == HIGH) {
+      stopMotor(speedPin);
+      return;
+    }
+  }
+  digitalWrite(dirPin, direction ? HIGH : LOW);
+  analogWrite(speedPin, constrain(speedPWM, 0, 255));
+}
+
+// Boundary Sensor Handler
+
+void handleBoundarySensorTriggered(bool inCalibration) {
+  stopMotor(motorQSpeedPin);
+  stopMotor(motorRSpeedPin);
+
+  // This is the fix: reset targets
+  motorPosQ = 16;
+  motorPosR = 16;
+
+  clearAllLines();
+  if (inCalibration) {
+    drawLine(0, "Boundary Sensor");
+    drawLine(1, "Blocked!");
+    while (digitalRead(boundarySensorPin) == LOW) delay(100);
+    clearAllLines();
+    drawLine(0, "Boundary Clear!");
+    delay(1000);
+  } else {
+    drawLine(0, "Boundary Triggered!");
+    drawLine(1, "Recentering...");
+    moveToCenter();
+
+    // Set targets again to be extra sure (optional but robust)
+    motorPosQ = 16;
+    motorPosR = 16;
+
+    drawLine(0, "Waiting: Boundary");
+    drawLine(1, "to clear...");
+    while (digitalRead(boundarySensorPin) == LOW) delay(100);
+    clearAllLines();
+    drawLine(0, "Boundary Clear!");
+    delay(2000);
+  }
+}
+
+// E-Stop Handler
+void handleEStopTriggered(bool inCalibration) {
+  stopMotor(motorQSpeedPin);
+  stopMotor(motorRSpeedPin);
+
+  // The fix: reset targets
+  motorPosQ = 16;
+  motorPosR = 16;
+
+  clearAllLines();
+  if (inCalibration) {
+    drawLine(0, "E-Stop Activated!");
+    drawLine(1, "Restart Machine");
+    while (true) delay(1000);
+  } else {
+    drawLine(0, "E-Stop Activated!");
+    drawLine(1, "Recentering...");
+    moveToCenter();
+
+    // Set targets again to be extra sure
+    motorPosQ = 16;
+    motorPosR = 16;
+
+    drawLine(0, "Press Start to");
+    drawLine(1, "resume motion");
+    waitForStartLampCommand();
+  }
+}
+
+// Move to Center Helper
+void moveToCenter() {
+  int center = 16;
+  while (abs(mapEncoderToPosition(encoderQPosition, encoderQMin, encoderQMax, motorQPolarityReversed) - center) > 1 ||
+         abs(mapEncoderToPosition(encoderRPosition, encoderRMin, encoderRMax, motorRPolarityReversed) - center) > 1) {
+    // Q motor
+    bool qDir = getCorrectedDirection(center < mapEncoderToPosition(encoderQPosition, encoderQMin, encoderQMax, motorQPolarityReversed), motorQPolarityReversed);
+    if (qDir) { // Moving UP
+      if (digitalRead(motorQUpperLimitPin) == HIGH)
+        stopMotor(motorQSpeedPin);
+      else
+        moveMotor(motorQDirectionPin, qDir, 24, motorQSpeedPin);
+    } else { // Moving DOWN
+      if (digitalRead(motorQLowerLimitPin) == HIGH)
+        stopMotor(motorQSpeedPin);
+      else
+        moveMotor(motorQDirectionPin, qDir, 24, motorQSpeedPin);
+    }
+    // Same for R motor
+    bool rDir = getCorrectedDirection(center < mapEncoderToPosition(encoderRPosition, encoderRMin, encoderRMax, motorRPolarityReversed), motorRPolarityReversed);
+    if (rDir) {
+      if (digitalRead(motorRUpperLimitPin) == HIGH)
+        stopMotor(motorRSpeedPin);
+      else
+        moveMotor(motorRDirectionPin, rDir, 24, motorRSpeedPin);
+    } else {
+      if (digitalRead(motorRLowerLimitPin) == HIGH)
+        stopMotor(motorRSpeedPin);
+      else
+        moveMotor(motorRDirectionPin, rDir, 24, motorRSpeedPin);
+    }
+    delay(50);
+  }
+  stopMotor(motorQSpeedPin);
+  stopMotor(motorRSpeedPin);
+}
+
+
+// Wait for A1 ("start lamp") serial command
+void waitForStartLampCommand() {
+  // Assume a global "startLampState" that is set true by serial processSerialCommand()
+  while (!startLampState) delay(100);
+}
+
+
+//Settings Mode
+void handleSettingsMode() {
+  // Load latest settings (from RAM, which should match EEPROM already)
+  float settings[numSettings] = {
+    Kp, Ki, Kd, minPWMQ, maxPWMQ,
+    KpR, KiR, KdR, minPWMR, maxPWMR,
+    (float)emergencyStopEnabled,
+    (float)boundarySensorEnabled,
+    (float)cabinEStopEnabled
+  };
+
+  cursorPos = 0;
+  clearAllLines();  // Only clear once at mode entry
+
+  unsigned long lastUpdate = 0;
+  bool edited = false;
+  bool exitRequested = false;
+
+  // Helper: Mark all lines as dirty, to force redraw
+  for (int i = 0; i < 16; ++i) lastLines[i] = "";
+
+  while (!exitRequested) {
+    // Button reads
+    bool leftFwdPressed = digitalRead(testLeftFwdPin) == LOW;
+    bool leftRevPressed = digitalRead(testLeftRevPin) == LOW;
+    bool rightFwdPressed = digitalRead(testRightFwdPin) == LOW;
+    bool rightRevPressed = digitalRead(testRightRevPin) == LOW;
+    bool saveExitPinState = digitalRead(settingsModeSwitchPin) == HIGH; // "Release" to save
+
+    // Cursor movement (debounce)
+    static bool lastLeftFwd = false, lastLeftRev = false;
+    if (leftFwdPressed && !lastLeftFwd)  cursorPos = (cursorPos + 1) % numSettings;
+    if (leftRevPressed && !lastLeftRev)  cursorPos = (cursorPos - 1 + numSettings) % numSettings;
+    lastLeftFwd = leftFwdPressed;
+    lastLeftRev = leftRevPressed;
+
+    // Value editing (debounce)
+    static bool lastRightFwd = false, lastRightRev = false;
+    if (rightFwdPressed && !lastRightFwd) {
+      if (cursorPos >= 10) settings[cursorPos] = 1; // ON for any of the three toggles
+      else if ((cursorPos % 5) < 3) settings[cursorPos] += 0.1f; // PID
+      else settings[cursorPos] += 10.0f; // PWM
+      edited = true;
+    }
+    if (rightRevPressed && !lastRightRev) {
+      if (cursorPos >= 10) settings[cursorPos] = 0; // OFF for any of the three toggles
+      else if ((cursorPos % 5) < 3) settings[cursorPos] -= 0.1f; // PID
+      else settings[cursorPos] -= 10.0f; // PWM
+      edited = true;
+    }
+    lastRightFwd = rightFwdPressed;
+    lastRightRev = rightRevPressed;
+
+    // Clamp values to sensible ranges as they're edited
+    settings[0]  = constrain(settings[0],  0.0, 100.0); // Q Kp
+    settings[1]  = constrain(settings[1],  0.0, 100.0); // Q Ki
+    settings[2]  = constrain(settings[2],  0.0, 100.0); // Q Kd
+    settings[3]  = constrain(settings[3],  0, 255);     // Q minPWM
+    settings[4]  = constrain(settings[4],  settings[3], 255); // Q maxPWM
+
+    settings[5]  = constrain(settings[5],  0.0, 100.0); // R Kp
+    settings[6]  = constrain(settings[6],  0.0, 100.0); // R Ki
+    settings[7]  = constrain(settings[7],  0.0, 100.0); // R Kd
+    settings[8]  = constrain(settings[8],  0, 255);     // R minPWM
+    settings[9]  = constrain(settings[9],  settings[8], 255); // R maxPWM
+
+    // OLED update (only draw what changes)
+    if (millis() - lastUpdate > 120) {
+      lastUpdate = millis();
+      for (int i = 0; i < numSettings; ++i) {
+        String label;
+        switch (i) {
+          case 0:  label = "Q Kp:"; break;
+          case 1:  label = "Q Ki:"; break;
+          case 2:  label = "Q Kd:"; break;
+          case 3:  label = "Q minPWM:"; break;
+          case 4:  label = "Q maxPWM:"; break;
+          case 5:  label = "R Kp:"; break;
+          case 6:  label = "R Ki:"; break;
+          case 7:  label = "R Kd:"; break;
+          case 8:  label = "R minPWM:"; break;
+          case 9:  label = "R maxPWM:"; break;
+          case 10: label = "EMERGENCY:"; break;
+          case 11: label = "BOUNDARY:"; break;
+          case 12: label = "CABIN E-STOP:"; break;
+        }
+        String val;
+        if (i < 10 && !isnan(settings[i])) {
+          val = String(settings[i], 2);
+        } else if (i < 10 && isnan(settings[i])) {
+          val = "ERR";
+        } else {
+          val = (settings[i] > 0.5 ? "ON" : "OFF");
+        }
+        drawLine(i, (i == cursorPos ? "> " : "  ") + label + " " + val);
+      }
+      if (!saveExitPinState) {
+        drawLine(numSettings, "Set Pin6 HIGH to SAVE & EXIT");
+      } else {
+        drawLine(numSettings, "Saving & exiting...");
+      }
+    }
+
+    // SAVE & EXIT if pin 6 goes HIGH ("released")
+    if (saveExitPinState) {
+      // Write settings to main variables
+      Kp      = settings[0];
+      Ki      = settings[1];
+      Kd      = settings[2];
+      minPWMQ = settings[3];
+      maxPWMQ = settings[4];
+
+      KpR     = settings[5];
+      KiR     = settings[6];
+      KdR     = settings[7];
+      minPWMR = settings[8];
+      maxPWMR = settings[9];
+
+      emergencyStopEnabled  = settings[10] > 0.5;
+      boundarySensorEnabled = settings[11] > 0.5;
+      cabinEStopEnabled     = settings[12] > 0.5;
+
+      // Save to EEPROM and update PID controllers
+      saveSettings();
+      pidQ.SetTunings(Kp, Ki, Kd);
+      pidR.SetTunings(KpR, KiR, KdR);
+
+      // Notify user
+      clearAllLines();
+      for (int countdown = 3; countdown > 0; --countdown) {
+        drawLine(0, "Settings saved.");
+        drawLine(1, "Re-entering main mode in " + String(countdown) + "...");
+        delay(800);
+      }
+      clearAllLines();
+      exitRequested = true;
+    }
+
+    delay(8); // Small delay for stability
+  }
+
+  // Settings saved, exit to main/calibration mode (do not call while loop again)
+}
+
+
+
+
+
+//EPROM Helpers for the Settings Menu
+void writeFloat(int addr, float val) {
+  byte* b = (byte*)(void*)&val;
+  for (int i = 0; i < 4; i++) EEPROM.write(addr + i, b[i]);
+}
+float readFloat(int addr) {
+  float val;
+  byte* b = (byte*)(void*)&val;
+  for (int i = 0; i < 4; i++) b[i] = EEPROM.read(addr + i);
+  return val;
+}
+
+//Save Settings Function
+void saveSettings() {
+  writeFloat(ADDR_KpQ, Kp); 
+  writeFloat(ADDR_KiQ, Ki); 
+  writeFloat(ADDR_KdQ, Kd);
+  writeFloat(ADDR_minPWMQ, minPWMQ); 
+  writeFloat(ADDR_maxPWMQ, maxPWMQ);
+  writeFloat(ADDR_KpR, KpR); 
+  writeFloat(ADDR_KiR, KiR); 
+  writeFloat(ADDR_KdR, KdR);
+  writeFloat(ADDR_minPWMR, minPWMR); 
+  writeFloat(ADDR_maxPWMR, maxPWMR);
+
+  EEPROM.write(ADDR_emergencyStop, emergencyStopEnabled ? 1 : 0);
+  EEPROM.write(ADDR_boundarySensorEnabled, boundarySensorEnabled ? 1 : 0);
+  EEPROM.write(ADDR_cabinEStopEnabled, cabinEStopEnabled ? 1 : 0);
+}
+
+void loadSettings() {
+  Kp = readFloat(ADDR_KpQ);
+  if (isnan(Kp) || Kp < 0.0 || Kp > 100.0) Kp = 22.0;
+  Ki = readFloat(ADDR_KiQ);
+  if (isnan(Ki) || Ki < 0.0 || Ki > 100.0) Ki = 4.0;
+  Kd = readFloat(ADDR_KdQ);
+  if (isnan(Kd) || Kd < 0.0 || Kd > 100.0) Kd = 0.6;
+
+  minPWMQ = readFloat(ADDR_minPWMQ);
+  if (isnan(minPWMQ) || minPWMQ < 0.0 || minPWMQ > 255.0) minPWMQ = 80;
+  maxPWMQ = readFloat(ADDR_maxPWMQ);
+  if (isnan(maxPWMQ) || maxPWMQ < minPWMQ || maxPWMQ > 255.0) maxPWMQ = 255;
+
+  KpR = readFloat(ADDR_KpR);
+  if (isnan(KpR) || KpR < 0.0 || KpR > 100.0) KpR = 22.0;
+  KiR = readFloat(ADDR_KiR);
+  if (isnan(KiR) || KiR < 0.0 || KiR > 100.0) KiR = 3.5;
+  KdR = readFloat(ADDR_KdR);
+  if (isnan(KdR) || KdR < 0.0 || KdR > 100.0) KdR = 0.6;
+
+  minPWMR = readFloat(ADDR_minPWMR);
+  if (isnan(minPWMR) || minPWMR < 0.0 || minPWMR > 255.0) minPWMR = 80;
+  maxPWMR = readFloat(ADDR_maxPWMR);
+  if (isnan(maxPWMR) || maxPWMR < minPWMR || maxPWMR > 255.0) maxPWMR = 255;
+
+  emergencyStopEnabled      = EEPROM.read(ADDR_emergencyStop) ? true : false;
+  boundarySensorEnabled     = EEPROM.read(ADDR_boundarySensorEnabled) ? true : false;
+  cabinEStopEnabled        = EEPROM.read(ADDR_cabinEStopEnabled) ? true : false;
+}
+
+
+
+
+// --------- TEST MODE ---------
+void handleTestMode() {
+  // Emergency Stop Handling (if global emergency flag is set)
+  if (emergencyStopActivated) {
+    stopMotor(motorQSpeedPin);
+    stopMotor(motorRSpeedPin);
+    clearAllLines();
+    drawLine(0, "!!! EMERGENCY STOP !!!");
+    return; // Skip test mode if emergency is active
+  }
+
+  // --- Read all button inputs ---
+  bool leftFwdPressed  = digitalRead(testLeftFwdPin) == LOW;
+  bool leftRevPressed  = digitalRead(testLeftRevPin) == LOW;
+  bool rightFwdPressed = digitalRead(testRightFwdPin) == LOW;
+  bool rightRevPressed = digitalRead(testRightRevPin) == LOW;
+  bool currentSpeedBtnState = digitalRead(testSpeedButtonPin);
+
+  // --- Read E-Stop and Boundary sensors (digital) ---
+  bool estopButtonClosed = digitalRead(estopButtonPin) == LOW;          // D25
+  bool boundaryTriggered = digitalRead(boundarySensorPin) == LOW;       // D27
+
+  // --- Handle speed button toggle ---
+  static bool lastSpeedBtnState = HIGH;
+  if (lastSpeedBtnState == HIGH && currentSpeedBtnState == LOW) {
+    incrementTestSpeed(); // Cycle through speed settings
+  }
+  lastSpeedBtnState = currentSpeedBtnState;
+  int testSpeedPercent = testSpeedSetting * 14;
+
+  // --- Toggle lamps every second for visual check ---
+  static unsigned long lastToggle = 0;
+  static bool lampState = false;
+  if (millis() - lastToggle > 1000) {
+    lastToggle = millis();
+    lampState = !lampState;
+    digitalWrite(startLampRelayPin, lampState ? HIGH : LOW);
+    digitalWrite(dangerLampRelayPin, lampState ? HIGH : LOW);
+  }
+
+  // --- OLED & Serial Diagnostics (update every 250ms) ---
+  if (millis() - lastDisplayUpdate > displayUpdateInterval) {
+    lastDisplayUpdate = millis();
+
+    drawLine(0,  "TEST MODE");
+
+    // Limit switch status (Normally Closed = LOW, HIGH = triggered/open)
+    drawLine(1,  "Q Lim U: " + String(digitalRead(motorQUpperLimitPin) == HIGH ? "TRIGGERED" : "CLEAR"));
+    drawLine(2,  "Q Lim L: " + String(digitalRead(motorQLowerLimitPin) == HIGH ? "TRIGGERED" : "CLEAR"));
+    drawLine(3,  "R Lim U: " + String(digitalRead(motorRUpperLimitPin) == HIGH ? "TRIGGERED" : "CLEAR"));
+    drawLine(4,  "R Lim L: " + String(digitalRead(motorRLowerLimitPin) == HIGH ? "TRIGGERED" : "CLEAR"));
+
+    // E-stop and Boundary
+    drawLine(5, "E-STOP Btn: " + String(estopButtonClosed ? "CLOSED" : "OPEN!"));
+    drawLine(6, "Boundary:   " + String(boundaryTriggered ? "TRIGGERED" : "CLEAR"));
+
+    // Pot values (if used)
+    drawLine(7,  "Q Pot: " + String(analogRead(potMotorQPin)));
+    drawLine(8,  "R Pot: " + String(analogRead(potMotorRPin)));
+
+    // Speed & input status
+    drawLine(9,  "Test Speed: " + String(testSpeedPercent) + "%");
+    drawLine(10, "Speed Btn: " + String(currentSpeedBtnState == LOW ? "PRESSED" : "RELEASED"));
+    drawLine(11, "L FWD Btn: " + String(leftFwdPressed ? "ON" : "OFF"));
+    drawLine(12, "L REV Btn: " + String(leftRevPressed ? "ON" : "OFF"));
+    drawLine(13, "R FWD Btn: " + String(rightFwdPressed ? "ON" : "OFF"));
+    drawLine(14, "R REV Btn: " + String(rightRevPressed ? "ON" : "OFF"));
+
+    // Encoders for diagnostics
+    drawLine(15, "Q Enc: " + String(encoderQPosition) + " | R: " + String(encoderRPosition));
+
+    // --- Serial debug output for boundary sensor ---
+    Serial.print("Boundary digital: ");
+    Serial.println(digitalRead(boundarySensorPin));
+  }
+
+  // --- Manual motor control for left (Q) motor ---
+  if (leftFwdPressed && !leftRevPressed) {
+    moveMotor(motorQDirectionPin, HIGH, testSpeedPercent, motorQSpeedPin);
+  } else if (leftRevPressed && !leftFwdPressed) {
+    moveMotor(motorQDirectionPin, LOW, testSpeedPercent, motorQSpeedPin);
+  } else if (leftFwdPressed && leftRevPressed) {
+    moveMotor(motorQDirectionPin, HIGH, testSpeedPercent, motorQSpeedPin); // Default to forward if both pressed
+  } else {
+    stopMotor(motorQSpeedPin);
+  }
+
+  // --- Manual motor control for right (R) motor ---
+  if (rightFwdPressed && !rightRevPressed) {
+    moveMotor(motorRDirectionPin, HIGH, testSpeedPercent, motorRSpeedPin);
+  } else if (rightRevPressed && !rightFwdPressed) {
+    moveMotor(motorRDirectionPin, LOW, testSpeedPercent, motorRSpeedPin);
+  } else if (rightFwdPressed && rightRevPressed) {
+    moveMotor(motorRDirectionPin, HIGH, testSpeedPercent, motorRSpeedPin); // Default to forward if both pressed
+  } else {
+    stopMotor(motorRSpeedPin);
+  }
+}
+
+
+
+
+// --------- SETUP & MAIN LOOP ---------
+void setup() 
+{
+  // ---- Pin Setup ----
+  pinMode(motorQDirectionPin, OUTPUT);
+  pinMode(motorQSpeedPin, OUTPUT);
+  pinMode(motorQLowerLimitPin, INPUT_PULLUP);
+  pinMode(motorQUpperLimitPin, INPUT_PULLUP);
+
+  pinMode(motorRDirectionPin, OUTPUT);
+  pinMode(motorRSpeedPin, OUTPUT);
+  pinMode(motorRLowerLimitPin, INPUT_PULLUP);
+  pinMode(motorRUpperLimitPin, INPUT_PULLUP);
+
+  pinMode(testModeSwitchPin, INPUT_PULLUP);
+  pinMode(testLeftFwdPin, INPUT_PULLUP);
+  pinMode(testLeftRevPin, INPUT_PULLUP);
+  pinMode(testRightFwdPin, INPUT_PULLUP);
+  pinMode(testRightRevPin, INPUT_PULLUP);
+  pinMode(testSpeedButtonPin, INPUT_PULLUP);
+
+  pinMode(settingsModeSwitchPin, INPUT_PULLUP);
+
+  pinMode(motorQEnablePin, OUTPUT);
+  pinMode(motorREnablePin, OUTPUT);
+  digitalWrite(motorQEnablePin, LOW);
+  digitalWrite(motorREnablePin, LOW);
+
+  pinMode(encoderQPinA, INPUT_PULLUP);
+  pinMode(encoderQPinB, INPUT_PULLUP);
+  pinMode(encoderRPinA, INPUT_PULLUP);
+  pinMode(encoderRPinB, INPUT_PULLUP);
+
+  pinMode(startLampRelayPin, OUTPUT);
+  pinMode(dangerLampRelayPin, OUTPUT);
+  digitalWrite(startLampRelayPin, LOW);
+  digitalWrite(dangerLampRelayPin, LOW);
+
+  pinMode(estopButtonPin, INPUT_PULLUP);      // Assume NC loop, idle = LOW
+  pinMode(boundarySensorPin, INPUT_PULLUP); // Enable internal pullup
+
+  // ---- Serial and Display Setup ----
+  Serial.begin(9600);
+  tft.initR(INITR_BLACKTAB);
+  tft.setRotation(1);
+  tft.fillScreen(ST7735_BLACK);
+  tft.setTextSize(1);
+  tft.setTextColor(ST7735_WHITE);
+  clearAllLines();
+
+  // Rotary Encoders
+  attachInterrupt(digitalPinToInterrupt(encoderQPinA), countEncoderQ, RISING);
+  attachInterrupt(digitalPinToInterrupt(encoderRPinA), countEncoderR, RISING);
+
+  // ---- Load settings from EEPROM ----
+  loadSettings();
+  clearAllLines();
+  drawLine(0, "Settings loaded");
+  delay(1200); // Display confirmation
+
+  // ---- Update PID controllers with loaded values ----
+  pidQ.SetTunings(Kp, Ki, Kd);
+  pidR.SetTunings(KpR, KiR, KdR);
+  pidQ.SetOutputLimits(0, 255);
+  pidR.SetOutputLimits(0, 255);
+  pidQ.SetSampleTime(10);
+  pidR.SetSampleTime(10);
+  pidQ.SetMode(AUTOMATIC);
+  pidR.SetMode(AUTOMATIC);
+
+  // ---- Enter Settings Mode if BOTH switches are LOW at Boot ----
+  if (digitalRead(testModeSwitchPin) == LOW && digitalRead(settingsModeSwitchPin) == LOW) {
+    clearAllLines();
+    drawLine(0, "SETTINGS MODE");
+    handleSettingsMode();
+
+    // After handleSettingsMode() returns, reload settings and update PIDs:
+    loadSettings();
+    pidQ.SetTunings(Kp, Ki, Kd);
+    pidR.SetTunings(KpR, KiR, KdR);
+    clearAllLines();
+    drawLine(0, "Settings loaded");
+    delay(1200);
+  }
+  // ---- Otherwise enter Test Mode if only Test Switch is LOW ----
+  else if (digitalRead(testModeSwitchPin) == LOW) {
+    clearAllLines();
+    drawLine(0, "Test mode on startup");
+    if (DEBUG) Serial.println("[INFO] Test mode switch LOW – entering test mode...");
+    while (true) {
+      handleTestMode();
+      delay(20);
+    }
+  }
+
+  // ---- Limit Switch Sanity Check (for NC switches) ----
+  if (digitalRead(motorQUpperLimitPin) == HIGH ||
+      digitalRead(motorQLowerLimitPin) == HIGH ||
+      digitalRead(motorRUpperLimitPin) == HIGH ||
+      digitalRead(motorRLowerLimitPin) == HIGH) {
+    clearAllLines();
+    drawLine(0, "LIMIT SWITCH ERROR");
+    drawLine(1, "Check Q UL: " + String(digitalRead(motorQUpperLimitPin)));
+    drawLine(2, "Check Q LL: " + String(digitalRead(motorQLowerLimitPin)));
+    drawLine(3, "Check R UL: " + String(digitalRead(motorRUpperLimitPin)));
+    drawLine(4, "Check R LL: " + String(digitalRead(motorRLowerLimitPin)));
+    drawLine(6, "Enter test mode to fix.");
+    if (DEBUG) Serial.println("[ERROR] One or more limit switches are not NC. Halting.");
+    while (true);
+  }
+
+  // ---- Begin Calibration ----
+  clearAllLines();
+  drawLine(0, "Running calibration...");
+  if (DEBUG) Serial.println("[INFO] Starting calibration...");
+  delay(1000);
+
+  runCalibrationMode();
+
+  // ---- Done ----
+  clearAllLines();
+  drawLine(0, "Ready (not test mode)");
+  if (DEBUG) Serial.println("[INFO] Calibration complete. System ready.");
+}
+
+void runCalibrationMode() {
+  clearAllLines();
+  drawLine(0, "Starting Calibration");
+  delay(1000);
+
+  // Calibrate Left Motor
+  if (!calibrateMotorWithSafety(
+        "Left", motorQDirectionPin, motorQUpperLimitPin, motorQLowerLimitPin,
+        motorQSpeedPin, true, encoderQMin, encoderQMax)) {
+    // Calibration was halted by E-Stop; return immediately
+    return;
+  }
+
+  // Calibrate Right Motor
+  if (!calibrateMotorWithSafety(
+        "Right", motorRDirectionPin, motorRUpperLimitPin, motorRLowerLimitPin,
+        motorRSpeedPin, false, encoderRMin, encoderRMax)) {
+    // Calibration was halted by E-Stop; return immediately
+    return;
+  }
+
+  clearAllLines();
+  drawLine(0, "Calibration Complete!");
+  delay(1500);
+}
+
+bool calibrateMotorWithSafety(
+    const char* label,
+    int dirPin,
+    int upLimitPin,
+    int downLimitPin,
+    int speedPin,
+    bool isLeftMotor,
+    long &encoderMin,
+    long &encoderMax) 
+{
+  clearAllLines();
+  drawLine(0, String("Calibrating ") + label);
+
+  long* encoderPos = isLeftMotor ? &encoderQPosition : &encoderRPosition;
+
+  // Step 1: Move to Lower Limit (REVERSE)
+  drawLine(1, "Moving to BOTTOM...");
+
+  moveMotor(dirPin, DIR_REVERSE, 50, speedPin);
+
+  while (digitalRead(downLimitPin) == LOW) {
+    // --- Safety Check: Cabin E-Stop ---
+    if (cabinEStopEnabled && digitalRead(estopButtonPin) == LOW) {
+      // PERMANENT HALT
+      handleEStopTriggered(true);
+      return false;
+    }
+    // --- Safety Check: Boundary Sensor ---
+    while (boundarySensorEnabled && digitalRead(boundarySensorPin) == LOW) {
+      handleBoundarySensorTriggered(true);
+    }
+    delay(5);
+  }
+  stopMotor(speedPin);
+  encoderMin = *encoderPos;
+  drawLine(2, "Bottom at: " + String(encoderMin));
+  delay(200);
+
+  // Back off slightly
+  moveMotor(dirPin, DIR_FORWARD, 30, speedPin);
+  delay(250);
+  stopMotor(speedPin);
+  delay(100);
+
+  // Step 2: Move to Upper Limit (FORWARD)
+  drawLine(3, "Moving to TOP...");
+  moveMotor(dirPin, DIR_FORWARD, 50, speedPin);
+
+  while (digitalRead(upLimitPin) == LOW) {
+    if (cabinEStopEnabled && digitalRead(estopButtonPin) == LOW) {
+      handleEStopTriggered(true);
+      return false;
+    }
+    while (boundarySensorEnabled && digitalRead(boundarySensorPin) == LOW) {
+      handleBoundarySensorTriggered(true);
+    }
+    delay(5);
+  }
+  stopMotor(speedPin);
+  encoderMax = *encoderPos;
+  drawLine(4, "Top at: " + String(encoderMax));
+  delay(200);
+
+  // Back off slightly
+  moveMotor(dirPin, DIR_REVERSE, 30, speedPin);
+  delay(250);
+  stopMotor(speedPin);
+  delay(100);
+
+  // Step 3: Move to Midpoint
+  long targetMid = (encoderMin + encoderMax) / 2;
+  drawLine(5, "Moving to MID...");
+  while (abs(*encoderPos - targetMid) > 3) {
+    if (cabinEStopEnabled && digitalRead(estopButtonPin) == LOW) {
+      handleEStopTriggered(true);
+      return false;
+    }
+    while (boundarySensorEnabled && digitalRead(boundarySensorPin) == LOW) {
+      handleBoundarySensorTriggered(true);
+    }
+
+    bool moveUp = encoderMax > encoderMin ? *encoderPos < targetMid : *encoderPos > targetMid;
+    moveMotor(dirPin, moveUp ? DIR_FORWARD : DIR_REVERSE, 30, speedPin);
+    delay(5);
+  }
+  stopMotor(speedPin);
+
+  drawLine(6, "Midpoint OK");
+
+  // --- Polarity and MapMin/Max Check (as before) ---
+  bool reversed = encoderMin > encoderMax;
+  int testMin = mapEncoderToPosition(encoderMin, encoderMin, encoderMax, reversed);
+  int testMax = mapEncoderToPosition(encoderMax, encoderMin, encoderMax, reversed);
+
+  if (testMin < testMax) {
+    reversed = !reversed;
+  }
+
+  drawLine(9, "MapMin: " + String(mapEncoderToPosition(encoderMin, encoderMin, encoderMax, reversed)));
+  drawLine(10, "MapMax: " + String(mapEncoderToPosition(encoderMax, encoderMin, encoderMax, reversed)));
+
+  // Store polarity
+  if (isLeftMotor) {
+    motorQPolarityReversed = reversed;
+  } else {
+    motorRPolarityReversed = reversed;
+  }
+
+  drawLine(8, String(label) + " Cal OK");
+  delay(1000);
+
+  return true; // Success
+}
+
+
+int mapEncoderToPosition(long encoderVal, long minVal, long maxVal, bool reversed) {
+  long bounded = constrain(encoderVal, min(minVal, maxVal), max(minVal, maxVal));
+  if (reversed) {
+    return map(bounded, minVal, maxVal, 32, 1);  // Invert mapping
+  } else {
+    return map(bounded, minVal, maxVal, 1, 32);   // Normal mapping
+  }
+
+  
+}
+
+void processSerialCommand(String input) {
+  char cmd = input.charAt(0);
+  int val = input.substring(1).toInt();
+
+  lastSerialDataTime = millis();
+
+  if (cmd == 'Q') {
+    motorPosQ = val;
+  }
+  else if (cmd == 'R') {
+    motorPosR = val;
+  }
+  else if (cmd == 'S') {
+    motorSpeedQ = val;
+  }
+  else if (cmd == 'T') {
+    motorSpeedR = val;
+  }
+  else if (cmd == 'A') { // Start Lamp
+    startLampState = (val > 0);
+    digitalWrite(startLampRelayPin, startLampState ? HIGH : LOW);
+    // If Start Lamp turns ON, clear E-Stop lockout
+    if (startLampState) {
+      waitForStartLamp = false;
+    }
+  }
+  else if (cmd == 'B') { // Danger Lamp
+    dangerLampState = (val > 0);
+    digitalWrite(dangerLampRelayPin, dangerLampState ? HIGH : LOW);
+  }
+  // Add additional serial command handling as required
+}
+
+
+void readSerialCommands() {
+  static String inputString = "";
+  while (Serial.available()) {
+    char inChar = (char)Serial.read();
+
+    // Ignore newline and carriage return characters
+    if (inChar == '\n' || inChar == '\r') continue;
+
+    if (inChar == 'x') {
+      // Received complete message
+      lastSerialDataTime = millis();
+
+      // Ignore empty or malformed commands
+      if (inputString.length() > 1) {
+        if (inputString.equals("PING")) {
+          // Heartbeat command – no action needed
+          if (DEBUG) Serial.println("Heartbeat: PING received");
+        } else {
+          processSerialCommand(inputString);
+        }
+      }
+
+      inputString = "";  // Always reset after terminator
+    } else {
+      inputString += inChar;
+
+      // Flush buffer if it grows too large (possible garbage or missed 'x')
+      if (inputString.length() > 20) {
+        if (DEBUG) Serial.println("Flushing oversized input: " + inputString);
+        inputString = "";
+      }
+    }
+  }
+}
+
+void handleDriftCorrection() {
+  static unsigned long lastResetTime = 0;
+  const unsigned long resetCooldown = 300; // milliseconds
+
+  if (millis() - lastResetTime < resetCooldown) return;
+
+  // LEFT motor (Q)
+  if (digitalRead(motorQLowerLimitPin) == HIGH && encoderQPosition != encoderQMin) {
+    encoderQPosition = encoderQMin;
+    if (DEBUG) Serial.println("[Q] Drift correction: Reset to encoderQMin");
+    lastResetTime = millis();
+  } else if (digitalRead(motorQUpperLimitPin) == HIGH && encoderQPosition != encoderQMax) {
+    encoderQPosition = encoderQMax;
+    if (DEBUG) Serial.println("[Q] Drift correction: Reset to encoderQMax");
+    lastResetTime = millis();
+  }
+
+  // RIGHT motor (R)
+  if (digitalRead(motorRLowerLimitPin) == HIGH && encoderRPosition != encoderRMin) {
+    encoderRPosition = encoderRMin;
+    if (DEBUG) Serial.println("[R] Drift correction: Reset to encoderRMin");
+    lastResetTime = millis();
+  } else if (digitalRead(motorRUpperLimitPin) == HIGH && encoderRPosition != encoderRMax) {
+    encoderRPosition = encoderRMax;
+    if (DEBUG) Serial.println("[R] Drift correction: Reset to encoderRMax");
+    lastResetTime = millis();
+  }
+}
+
+void checkTimeout() {
+  if (millis() - lastSerialDataTime > serialTimeout) {
+    motorPosQ = 16;
+    motorPosR = 16;
+    motorSpeedQ = 5;
+    motorSpeedR = 5;
+    if (DEBUG) Serial.println("Serial timeout — resetting targets.");
+  }
+}
+
+void controlMotorToTarget(
+  int dirPin,
+  int speedPin,
+  int upLimitPin,
+  int downLimitPin,
+  long currentEncoder,
+  int targetPos,
+  int speedPercent,
+  long minEnc,
+  long maxEnc,
+  bool isLeft
+) {
+  bool reversed = isLeft ? motorQPolarityReversed : motorRPolarityReversed;
+  int currentPos = mapEncoderToPosition(currentEncoder, minEnc, maxEnc, reversed);
+  if (abs(currentPos - targetPos) <= 1) {
+    stopMotor(speedPin);
+    return;
+  }
+
+  bool moveUp = currentPos > targetPos;
+  bool moveDown = currentPos < targetPos;
+if (moveUp && digitalRead(upLimitPin) == LOW) {
+  moveMotor(dirPin, getCorrectedDirection(true, reversed), speedPercent * 14, speedPin);
+} else if (moveDown && digitalRead(downLimitPin) == LOW) {
+  moveMotor(dirPin, getCorrectedDirection(false, reversed), speedPercent * 14, speedPin);
+}
+
+  if (DEBUG) {
+    Serial.print(isLeft ? "Q" : "R");
+    Serial.print(" | Curr: ");
+    Serial.print(currentPos);
+    Serial.print(" -> Target: ");
+    Serial.print(targetPos);
+    Serial.print(" | PWM: ");
+    Serial.println(speedPercent * 14);
+  }
+}
+
+void moveMotorPWM(int dirPin, int speedPWM, bool direction, int speedPin) {
+  digitalWrite(dirPin, direction ? HIGH : LOW);
+  analogWrite(speedPin, constrain(speedPWM, 0, 255));
+}
+
+void loop() {
+  readSerialCommands();
+  checkTimeout();
+
+  // Determine if there is motion activity (recent serial commands)
+  motionActive = (millis() - lastSerialDataTime < serialTimeout);
+
+  // --- Cabin E-Stop Logic ---
+  if (cabinEStopEnabled && digitalRead(estopButtonPin) == LOW && !eStopLatched) {
+    handleEStopTriggered(false);
+    eStopLatched = true;
+    waitForStartLamp = true;
+    return; // Everything else is blocked until reset
+  }
+
+  // --- E-Stop Recovery Mode ---
+  if (eStopLatched) {
+    if (!waitForStartLamp) {
+      // Start Lamp has been pressed, clear E-Stop state
+      eStopLatched = false;
+      clearAllLines();
+      drawLine(0, "E-Stop Cleared");
+      delay(1000);
+      clearAllLines();
+    } else {
+      // Still waiting for Start Lamp; do nothing except show message
+      clearAllLines();
+      drawLine(0, "E-Stop! Press Start");
+      delay(500);
+      return;
+    }
+  }
+
+  // --- Boundary Sensor Logic ---
+  if (boundarySensorEnabled && motionActive && digitalRead(boundarySensorPin) == LOW && !boundaryActive) {
+    handleBoundarySensorTriggered(false);
+    boundaryActive = true;
+    return; // Cabin is paused until boundary is clear
+  }
+
+  if (boundaryActive && digitalRead(boundarySensorPin) == HIGH) {
+    boundaryActive = false;
+  }
+
+  // --- Normal Motion Logic ---
+
+  // Map encoder values to 1–32 scale
+  inputQ = mapEncoderToPosition(encoderQPosition, encoderQMin, encoderQMax, motorQPolarityReversed);
+  inputR = mapEncoderToPosition(encoderRPosition, encoderRMin, encoderRMax, motorRPolarityReversed);
+
+  setpointQ = motorPosQ;
+  setpointR = motorPosR;
+
+  pidQ.Compute();
+  pidR.Compute();
+
+  int pwmQ = 0;
+  int pwmR = 0;
+
+  // --- Safety lockout for limits ---
+  const int hysteresis = 1;
+  bool leftBackoff = false;
+  bool rightBackoff = false;
+
+  // Left Motor Backoff Logic
+  if (digitalRead(motorQLowerLimitPin) == LOW && inputQ == 32) {
+    stopMotor(motorQSpeedPin);
+    leftBackoff = true;
+  } else if (digitalRead(motorQUpperLimitPin) == LOW && inputQ == 1) {
+    stopMotor(motorQSpeedPin);
+    leftBackoff = true;
+  } else {
+    leftBackoff = false;
+  }
+
+  // Right Motor Backoff Logic
+  if (digitalRead(motorRLowerLimitPin) == LOW && inputR == 32) {
+    stopMotor(motorRSpeedPin);
+    rightBackoff = true;
+  } else if (digitalRead(motorRUpperLimitPin) == LOW && inputR == 1) {
+    stopMotor(motorRSpeedPin);
+    rightBackoff = true;
+  } else {
+    rightBackoff = false;
+  }
+
+  // Movement logic
+  bool qShouldMove = (abs(inputQ - setpointQ) > hysteresis && !leftBackoff);
+  bool rShouldMove = (abs(inputR - setpointR) > hysteresis && !rightBackoff);
+
+  bool moveUpQ = (setpointQ > inputQ);
+  bool moveUpR = (setpointR > inputR);
+
+  // --- Apply safety wrapper to ALL motor movements ---
+  if (qShouldMove) {
+    bool dirQ = getCorrectedDirection(moveUpQ, motorQPolarityReversed);
+    pwmQ = constrain((int)outputQ + 70, minPWMQ, maxPWMQ);
+    safeMoveMotorPWM(motorQDirectionPin, pwmQ, dirQ, motorQSpeedPin, motorQUpperLimitPin, motorQLowerLimitPin);
+  } else {
+    stopMotor(motorQSpeedPin);
+    pwmQ = 0;
+  }
+
+  if (rShouldMove) {
+    bool dirR = getCorrectedDirection(moveUpR, motorRPolarityReversed);
+    pwmR = constrain((int)outputR + 70, minPWMR, maxPWMR);
+    safeMoveMotorPWM(motorRDirectionPin, pwmR, dirR, motorRSpeedPin, motorRUpperLimitPin, motorRLowerLimitPin);
+  } else {
+    stopMotor(motorRSpeedPin);
+    pwmR = 0;
+  }
+
+  // --- OLED feedback ---
+  drawLine(0, "Target Q: " + String(setpointQ));
+  drawLine(1, "Target R: " + String(setpointR));
+  drawLine(2, "Mapped Q: " + String(inputQ));
+  drawLine(3, "Mapped R: " + String(inputR));
+  drawLine(4, "Output Q: " + String(outputQ));
+  drawLine(5, "Output R: " + String(outputR));
+  drawLine(6, "Q Move? " + String(qShouldMove ? "YES" : "NO"));
+  drawLine(7, "R Move? " + String(rShouldMove ? "YES" : "NO"));
+  drawLine(8, "Serial: " + String((millis() - lastSerialDataTime < serialTimeout) ? "ACTIVE" : "TIMEOUT"));
+  drawLine(9, "PWM Q: " + String(pwmQ));
+  drawLine(10, "PWM R: " + String(pwmR));
+  drawLine(11, "Start Lamp: " + String(startLampState ? "ON" : "OFF"));
+  drawLine(12, "Danger Lamp: " + String(dangerLampState ? "ON" : "OFF"));
+  drawLine(13, "Boundary: " +
+    String(digitalRead(boundarySensorPin) == LOW ? "TRIGGERED" : "CLEAR") +
+    (boundaryActive ? " (RECOVERY)" : ""));
+  drawLine(14, "E-Stop Btn: " +
+    String(digitalRead(estopButtonPin) == LOW ? "PRESSED" : "OK") +
+    (eStopLatched ? " (LOCKED)" : ""));
+  drawLine(15, "E-Stop State: " +
+    String(eStopLatched ? "TRIGGERED" : "READY"));
+
+  handleDriftCorrection();
+  delay(0);
+}
