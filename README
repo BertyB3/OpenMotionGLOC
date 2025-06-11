@@ -1,0 +1,179 @@
+Open Motion G-LOC – Sega Motion Platform Restoration (by Berty)
+Restoring the Sega G-LOC Deluxe motion cabinet with modern, open-source tech
+
+Project Goals
+This project aims to get more Sega G-LOC motion cabinets back up and running—safely, reliably, and with off-the-shelf parts—without needing rare or temperamental original Sega hardware. Everything is fully documented, open, and designed for the home enthusiast or arcade tech.
+The software is designed for the Arduino Mega 2560, and can be used for G-LOC, Strike Fighter, or any MAME game that outputs motor commands via MAME Hooker.
+
+How It Works
+Arduino-based Controller: Replaces the original PCB, controlling both axes with closed-loop PID logic.
+
+MAME/MAME Hooker Integration: Runs on a Windows PC, sending live motor and lamp commands over USB serial.
+
+Real Hardware Feel: Uses your cabinet’s DC motors, encoders, limit switches, and lamp relays for authentic motion and feedback.
+
+Easy Customization: All settings are adjustable and saved to EEPROM, with test and setup modes for diagnostics.
+
+Key Features
+Closed-Loop (PID) Control: Smooth, precise motion based on real-time encoder feedback.
+
+Limit Switch & E-Stop Support: NC limit switches and emergency stops are fully supported for safety.
+
+OLED Diagnostics: Displays live data, errors, and debug info.
+
+Test Mode: Allows manual testing of motors, buttons, limit switches, and lamps.
+
+Settings Mode: Adjust all key PID and PWM values, plus enable/disable safety features.
+
+Serial Timeout Fallback: If the serial connection to MAME/MAME Hooker is lost, the seat returns to center and motors stop.
+
+Safety Disclaimer
+USE AT YOUR OWN RISK
+
+This project involves high-powered motors, mains electricity, and moving machinery. Building, modifying, or operating arcade motion platforms carries significant risk of injury, death, or property damage.
+
+You are solely responsible for your own safety. The author assumes NO LIABILITY for any injury, damage, or loss resulting from use or misuse of this project or its software.
+
+If you are not comfortable working with high-voltage DC, large motors, or custom electronics, seek professional advice before proceeding.
+
+Licensing & Attribution
+This project is licensed under the Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0) license.
+
+Non-commercial use only.
+
+You must credit the original author: Luke McMillan (Berty).
+
+See LICENSE.txt for details.
+
+If you use or build upon this project, please acknowledge the original author and link to the original repository.
+
+Quick Start & User Guide
+1. Mechanical Checklist
+Replace belts, service gearboxes, and check for mechanical resistance.
+
+Inspect and, if needed, replace bushings and limit switches (should be Normally Closed).
+
+Disconnect potentiometers if not used (can cause “brown out” issues on Arduino).
+
+2. Electrical Setup
+Use a robust DC power supply (e.g., 24V, 1500W) for the motors.
+
+Compatible PWM motor controllers: MMT-4Q or similar, supporting forward/reverse and PWM input.
+
+For controllers needing 0–10V PWM, use a PWM-to-DAC converter.
+
+3. Arduino Wiring
+Connect both motors, encoders, limit switches, and safety circuits to the Arduino Mega 2560.
+
+Use shielded wire for PWM and encoder lines; consider pull-down resistors for PWM pins.
+
+Pinout and wiring spreadsheet:
+Google Sheet – Open Motion G-LOC Pinout
+
+4. Test Mode
+How to enter: Hold the Test Mode switch LOW (closed) on boot.
+
+Use it to: Check wiring, test motors and switches, verify encoder response, and debug hardware before running the main software.
+
+All live sensor/motor data appears on the OLED.
+
+5. Settings Mode
+How to enter: Hold BOTH the Test Mode and Settings Mode switches LOW on boot.
+
+Adjust PID/PWM settings and toggle safety features via OLED/menu interface.
+
+All changes save automatically to EEPROM.
+
+6. Calibration
+At startup (unless in test/settings mode), the seat will move to both physical extremes to calibrate encoder min/max.
+
+Calibration is required for safe operation!
+
+7. Main Operation
+Connect your PC running MAME and MAME Hooker.
+
+MAME Hooker sends serial commands to Arduino (Q, R = motor positions; S, T = speeds; A, B = lamps).
+
+Seat position and lamp states update in real time.
+
+Example serial command:
+Q18xR24xS5xT4xA1xB0x
+
+PC Integration
+MAME/MAME Hooker: Use MAME Hooker INI files to set up serial output (COM port, 9600 baud).
+
+Arduino IDE: Required for uploading code, serial debugging, and device drivers.
+
+Debug Mode: Serial debug messages are disabled by default to prevent MAME Hooker issues; enable if needed for troubleshooting.
+
+PID Tuning Tips
+Default PID values (in code) are tuned for 24V motors using MMT-4Q drivers.
+
+If your setup is sluggish or overshoots, try increasing or decreasing the Kp, Ki, Kd values in Settings Mode.
+
+Always retest in Test Mode before running full motion.
+
+Safety Features – Status
+Limit Switches: Fully supported, must be wired as Normally Closed.
+
+Emergency Stop/Boundary Sensors: Code support included, but further testing and tuning may be required in your setup.
+
+You can disable/enable these in Settings Mode.
+
+Serial Timeout: If no serial command is received, seat recenters and motors stop for safety.
+
+Known Issues & Community Help
+Safety features are a work in progress! They require further real-world testing and may not always behave as expected.
+
+Some setups may have direction/polarity issues—double-check your wiring and motor leads.
+
+Please post issues, suggestions, and fixes in the forum thread or as GitHub issues. Contributions welcome!
+
+Screenshots (OLED Examples)
+Normal Operation
+Target Q: 18 
+Target R: 24 
+Mapped Q: 19 
+Mapped R: 23 
+Q Move? YES 
+R Move? NO 
+Serial: ACTIVE 
+PWM Q: 142 
+PWM R: 0 
+Start Lamp: ON 
+Danger Lamp: OFF 
+E-STOP: CLEAR
+Test Mode
+
+
+TEST MODE
+Q Lim U: CLEAR
+Q Lim L: TRIGGERED
+R Lim U: CLEAR
+R Lim L: CLEAR
+Test Speed: 56%
+L FWD Btn: ON
+L REV Btn: OFF
+Q Encoder: 123456
+R Encoder: 123455
+
+Settings Mode
+Q Kp: 22.00
+Q Ki: 4.00
+Q Kd: 0.60
+Q minPWM: 80.00
+Q maxPWM: 255.00
+R Kp: 22.00
+R Ki: 3.50
+R Kd: 0.60
+R minPWM: 80.00
+R maxPWM: 255.00
+EMERGENCY: ON
+Release Pin6 to SAVE & EXIT
+
+Citation & Credit
+If you use or modify this project, please credit Luke McMillan (Berty) and link to the original GitHub repo or forum post.
+Let’s help keep more Sega motion cabinets alive and moving!
+
+See LICENSE.txt for full license terms and disclaimer.
+
