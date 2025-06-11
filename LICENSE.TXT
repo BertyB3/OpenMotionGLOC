@@ -1,0 +1,21 @@
+Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)
+
+Copyright (c) 2025 Luke McMillan
+
+You are free to:
+- **Share** — copy and redistribute the material in any medium or format
+- **Adapt** — remix, transform, and build upon the material
+
+Under the following terms:
+- **Attribution** — You must give appropriate credit, provide a link to the license, and indicate if changes were made. You may do so in any reasonable manner, but not in any way that suggests the licensor endorses you or your use.
+- **NonCommercial** — You may not use the material for commercial purposes.
+
+No additional restrictions — You may not apply legal terms or technological measures that legally restrict others from doing anything the license permits.
+
+**USE AT YOUR OWN RISK**
+This software and all associated documentation are provided "AS IS," without warranty of any kind, express or implied. Working with high-powered motors and electronics carries significant risk of injury, death, or property damage. The author accepts no liability for any loss, damage, or injury resulting from the use or misuse of this software or hardware. YOU ARE SOLELY RESPONSIBLE FOR YOUR OWN SAFETY.
+
+**CITATION REQUEST**
+If you use or build upon this project, please acknowledge the original author, Luke McMillan, and provide a link to the original GitHub repository.
+
+Full license text: https://creativecommons.org/licenses/by-nc/4.0/legalcode
