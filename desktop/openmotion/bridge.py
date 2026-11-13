@@ -124,7 +124,7 @@ class Bridge:
             elif name in ('om_paused', 'pause'):
                 self.paused = bool(int(value))
                 if self.paused:
-                    self.disable('Paused; centred, motion disabled')
+                    self.disable('Paused; centre requested, motion disabled')
             elif name == 'mame_stop':
                 self.disable('Game ended')
                 self.stop_event.set()
@@ -163,7 +163,14 @@ class Bridge:
                  status['tx'].replace('\n', ' '), status['rx'].replace('\n', ' '), status['reason']]
         tmp = self.status_file.with_suffix('.tmp')
         tmp.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        os.replace(tmp, self.status_file)
+        try:
+            os.replace(tmp, self.status_file)
+        except PermissionError:
+            # Lua may briefly hold this file open without FILE_SHARE_DELETE on
+            # Windows. Keep the last report and retry next tick; status display
+            # contention must not tear down the game/serial transport.
+            return False
+        return True
 
     def run(self):
         parser = Lines()

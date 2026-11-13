@@ -72,6 +72,14 @@ class BridgeTest(unittest.TestCase):
         self.ready();self.b.enable()
         self.serial.write=lambda data:0
         self.b.tick(self.b.last_tx_at+0.06);self.assertFalse(self.b.armed)
+    def test_windows_status_reader_lock_does_not_disconnect_bridge(self):
+        from unittest.mock import patch
+        self.ready()
+        with patch('openmotion.bridge.os.replace',side_effect=PermissionError('reader holds file')):
+            self.assertFalse(self.b.publish())
+        self.assertTrue(self.b.verified)
+        self.assertTrue(self.b.publish())
+
     def test_status_distinguishes_host_write_from_feedback(self):
         self.ready();self.b.publish()
         self.assertEqual((self.path/'status.txt').read_text().splitlines()[0],'123')
