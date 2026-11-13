@@ -17,9 +17,15 @@ def save_json(path, value):
     tmp.write_text(json.dumps(value,indent=2)+'\n',encoding='utf-8')
     os.replace(tmp,path)
 
-def load_config():
+def load_config(bundle_root=None):
     p=ROOT/'cabinet.json'
     default={'emulator':'','rompath':str(ROOT/'roms'),'port':'','fullscreen':False,'overlay':True}
+    if bundle_root is not None:
+        bundle=Path(bundle_root)
+        marker=bundle/'bundle.json'
+        if marker.is_file() and json.loads(marker.read_text(encoding='utf-8')).get('schema')==1:
+            if (bundle/'emulator/manifest.json').is_file():default['emulator']=str((bundle/'emulator').resolve())
+            if (bundle/'roms').is_dir():default['rompath']=str((bundle/'roms').resolve())
     if p.exists():
         default.update(json.loads(p.read_text(encoding='utf-8')))
     return default

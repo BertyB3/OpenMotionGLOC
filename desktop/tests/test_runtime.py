@@ -110,3 +110,19 @@ class PatchTest(unittest.TestCase):
         self.assertEqual(out['other'],b'unchanged');self.assertEqual(convert(out,recipe),out)
 
 if __name__=='__main__':unittest.main()
+
+class BundleTest(unittest.TestCase):
+    def test_bundled_defaults_preserve_saved_settings(self):
+        from unittest.mock import patch
+        from openmotion import storage
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);app=root/'app';(app/'emulator').mkdir(parents=True);(app/'roms').mkdir()
+            (app/'bundle.json').write_text('{"schema":1}')
+            (app/'emulator/manifest.json').write_text('{}')
+            with patch.object(storage,'ROOT',root/'settings'):
+                cfg=storage.load_config(app)
+                self.assertEqual(cfg['emulator'],str((app/'emulator').resolve()))
+                self.assertEqual(cfg['rompath'],str((app/'roms').resolve()))
+                storage.save_json(root/'settings/cabinet.json',{'port':'COM19','rompath':'my existing ROM folder'})
+                cfg=storage.load_config(app)
+                self.assertEqual(cfg['port'],'COM19');self.assertEqual(cfg['rompath'],'my existing ROM folder')

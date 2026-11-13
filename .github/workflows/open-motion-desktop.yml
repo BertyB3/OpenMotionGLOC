@@ -3,8 +3,6 @@ on:
   push:
     branches: [desktop/windows-prototype]
     paths: [desktop/**, .github/workflows/open-motion-desktop.yml]
-  pull_request:
-    paths: [desktop/**, .github/workflows/open-motion-desktop.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -27,6 +25,14 @@ jobs:
           python -m PyInstaller --noconfirm --onedir --windowed --name OpenMotion
           --add-data "games.json;." --add-data "plugins;plugins"
           --add-data "rom-patches;rom-patches" app.py
+      - name: Smoke test compiled launcher at cabinet resolutions
+        shell: pwsh
+        working-directory: desktop/dist/OpenMotion
+        run: |
+          $process = Start-Process ./OpenMotion.exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Launcher smoke test timed out' }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path launcher-smoke.json)) { throw 'Launcher smoke test failed' }
+          Get-Content launcher-smoke.json
       - name: Include documentation
         shell: pwsh
         run: |
@@ -57,12 +63,13 @@ jobs:
         with:
           msystem: MINGW64
           update: true
-          install: make python mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf
+          install: make mingw-w64-x86_64-python mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf
       - name: Compile custom MAME for Windows x64
         shell: msys2 {0}
         run: |
+          export MINGW64=/mingw64 MINGW32=
           cd mame-mame0276
-          make SUBTARGET=openmotion SOURCES=src/mame/sega/segaybd.cpp,src/mame/sega/segaxbd.cpp,src/mame/sega/segahang.cpp,src/mame/sega/model1.cpp REGENIE=1 SYMBOLS=0 OPTIMIZE=2 NOWERROR=1 -j2
+          make PTR64=1 SUBTARGET=openmotion SOURCES=src/mame/sega/segaybd.cpp,src/mame/sega/segaxbd.cpp,src/mame/sega/segahang.cpp,src/mame/sega/model1.cpp REGENIE=1 SYMBOLS=0 OPTIMIZE=2 NOWERROR=1 -j4
           for game in gloc strkfgtr gforce2gloc aburner2 sharrierglc sharrier1glc wingwar360; do ./openmotion.exe -validate "$game"; done
           ./openmotion.exe -listfull > ../emulator-games.txt
       - name: Package emulator and ROM patches separately
@@ -96,4 +103,32 @@ jobs:
         with:
           name: OpenMotion-MAME-corresponding-source
           path: OpenMotion-MAME-0.276-corresponding-source.tar.gz
+          retention-days: 30
+
+  portable:
+    needs: [launcher, emulator]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-application
+          path: portable/OpenMotion
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-emulator-and-patches
+          path: updates
+      - name: Assemble ready-to-extract portable application
+        shell: pwsh
+        run: |
+          python desktop/build/portable.py portable/OpenMotion updates/OpenMotion-MAME-0.276-v0.1.zip
+          Copy-Item updates/OpenMotion-Frozen-ROM-Patches.zip portable/OpenMotion/
+          Compress-Archive -Path portable/OpenMotion -DestinationPath OpenMotion-GLOC-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMotion-GLOC-Windows-x64-portable
+          path: OpenMotion-GLOC-Windows-x64.zip
           retention-days: 30

@@ -20,7 +20,7 @@ ORANGE='#ff7900';BG='#101010';FG='#f4f4f4'
 class CabinetApp:
     def __init__(self, root):
         self.root=root
-        self.config=load_config()
+        self.config=load_config(Path(sys.executable).parent if getattr(sys,'frozen',False) else ASSETS)
         self.bridge=None;self.process=None;self.process_log=None;self.started=0
         self.page='games';self.scale=1;self.selected=0;self.monitor_page=0
         self.games=json.loads((ASSETS/'games.json').read_text())
@@ -277,4 +277,18 @@ class CabinetApp:
         self.root.destroy()
 
 def main():
-    root=tk.Tk();CabinetApp(root);root.mainloop()
+    root=tk.Tk();app=CabinetApp(root)
+    if '--smoke-test' in sys.argv:
+        results=[]
+        for width,height in [(320,240),(640,480)]:
+            root.geometry(f'{width}x{height}')
+            root.update()
+            app.draw_games();root.update()
+            for child in app.body.winfo_children():
+                if child.winfo_ismapped() and (child.winfo_y()<0 or child.winfo_y()+child.winfo_height()>app.body.winfo_height()+1):
+                    raise AssertionError('Launcher control exceeds the window height')
+            results.append({'width':width,'height':height,'game_rows':app.list.size(),'status':'pass'})
+        Path('launcher-smoke.json').write_text(json.dumps(results,indent=2),encoding='utf-8')
+        app.close()
+    else:
+        root.mainloop()
