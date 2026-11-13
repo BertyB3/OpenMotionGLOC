@@ -1,0 +1,165 @@
+name: Open Motion desktop test build
+on:
+  push:
+    branches: [desktop/windows-prototype]
+    paths: [desktop/**, .github/workflows/open-motion-desktop.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  launcher:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install launcher dependencies
+        run: python -m pip install -r desktop/requirements.txt pyinstaller==6.11.1
+      - name: Test bridge, patcher and update installation
+        working-directory: desktop
+        run: python -m unittest discover -s tests -v
+      - name: Build portable Windows application
+        working-directory: desktop
+        run: >-
+          python -m PyInstaller --noconfirm --onedir --windowed --name OpenMotion
+          --add-data "games.json;." --add-data "plugins;plugins"
+          --add-data "rom-patches;rom-patches" app.py
+      - name: Smoke test compiled launcher at cabinet resolutions
+        shell: pwsh
+        working-directory: desktop/dist/OpenMotion
+        run: |
+          $process = Start-Process ./OpenMotion.exe -ArgumentList '--smoke-test' -PassThru
+          if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Launcher smoke test timed out' }
+          if ($process.ExitCode -ne 0 -or -not (Test-Path launcher-smoke.json)) { throw 'Launcher smoke test failed' }
+          Get-Content launcher-smoke.json
+      - name: Include documentation
+        shell: pwsh
+        run: |
+          Copy-Item desktop/README.md desktop/dist/OpenMotion/README.md
+          Copy-Item LICENSE.TXT desktop/dist/OpenMotion/LICENSE.TXT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-application
+          path: desktop/dist/OpenMotion
+          retention-days: 30
+  emulator:
+    if: ${{ !contains(github.event.head_commit.message, '[launcher only]') }}
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Download and verify original MAME source
+        shell: pwsh
+        run: |
+          Invoke-WebRequest 'https://codeload.github.com/mamedev/mame/tar.gz/refs/tags/mame0276' -OutFile upstream.tar.gz
+          if ((Get-FileHash upstream.tar.gz -Algorithm SHA256).Hash.ToLower() -ne '965dfc33d720b4c3c6e425d5959540bd0bac88e96b878a8560678c2f5b43c44f') { throw 'MAME source digest mismatch' }
+          tar -xzf upstream.tar.gz
+          python desktop/build/prepare_mame.py mame-mame0276
+      - uses: msys2/setup-msys2@v2
+        id: msys
+        with:
+          msystem: MINGW64
+          update: true
+          install: make mingw-w64-x86_64-python mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf
+      - name: Identify compiler environment
+        id: toolchain
+        shell: msys2 {0}
+        run: echo "digest=$(pacman -Q | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: build-cache
+        with:
+          path: mame-mame0276/build
+          key: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('desktop/patches/**', 'desktop/build/network.cpp') }}
+          restore-keys: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-
+      - name: Compile custom MAME for Windows x64
+        id: compile
+        shell: msys2 {0}
+        run: |
+          export MINGW64=/mingw64 MINGW32=
+          cd mame-mame0276
+          make PTR64=1 SUBTARGET=openmotion SOURCES=src/mame/sega/segaybd.cpp,src/mame/sega/segaxbd.cpp,src/mame/sega/segahang.cpp,src/mame/sega/model1.cpp REGENIE=1 SYMBOLS=0 OPTIMIZE=2 NOWERROR=1 -j4 2>&1 | tee ../mame-build.log
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.compile.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: mame-mame0276/build
+          key: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('desktop/patches/**', 'desktop/build/network.cpp') }}
+      - name: Validate game registrations
+        shell: msys2 {0}
+        run: |
+          cd mame-mame0276
+          for game in gloc strkfgtr gforce2gloc aburner2 sharrierglc sharrier1glc wingwar360; do ./openmotion.exe -validate "$game"; done
+          ./openmotion.exe -listfull > ../emulator-games.txt
+      - name: Package emulator and ROM patches separately
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory emulator-payload -Force
+          Copy-Item mame-mame0276/openmotion.exe emulator-payload/
+          Copy-Item mame-mame0276/plugins emulator-payload/plugins -Recurse
+          Copy-Item mame-mame0276/COPYING emulator-payload/
+          Copy-Item mame-mame0276/docs/legal emulator-payload/legal -Recurse
+          Copy-Item desktop/README.md emulator-payload/OpenMotion-README.md
+          # MinGW runtimes, when dynamically linked, travel with the executable.
+          Get-ChildItem ${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libgcc_s_seh-1.dll,${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libstdc++-6.dll,${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libwinpthread-1.dll -ErrorAction SilentlyContinue | Copy-Item -Destination emulator-payload/
+          python desktop/build/package.py emulator emulator-payload OpenMotion-MAME-0.276-v0.1.zip --version 0.1.0 --executable openmotion.exe
+          python desktop/build/package.py rom_patch desktop/rom-patches OpenMotion-Frozen-ROM-Patches.zip --version 2026.11.13
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: OpenMotion-emulator-build-diagnostics
+          path: |
+            mame-build.log
+            mame-mame0276/openmotion.exe
+          retention-days: 7
+      - name: Package corresponding MAME source
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          Remove-Item mame-mame0276/build -Recurse -Force
+          Remove-Item mame-mame0276/openmotion.exe -Force
+          tar -czf OpenMotion-MAME-0.276-corresponding-source.tar.gz mame-mame0276
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-emulator-and-patches
+          path: |
+            OpenMotion-MAME-0.276-v0.1.zip
+            OpenMotion-Frozen-ROM-Patches.zip
+            emulator-games.txt
+          retention-days: 30
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.compile.outcome == 'success' }}
+        with:
+          name: OpenMotion-MAME-corresponding-source
+          path: OpenMotion-MAME-0.276-corresponding-source.tar.gz
+          retention-days: 30
+
+  portable:
+    needs: [launcher, emulator]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-application
+          path: portable/OpenMotion
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-emulator-and-patches
+          path: updates
+      - name: Assemble ready-to-extract portable application
+        shell: pwsh
+        run: |
+          python desktop/build/portable.py portable/OpenMotion updates/OpenMotion-MAME-0.276-v0.1.zip
+          Copy-Item updates/OpenMotion-Frozen-ROM-Patches.zip portable/OpenMotion/
+          Compress-Archive -Path portable/OpenMotion -DestinationPath OpenMotion-GLOC-Windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMotion-GLOC-Windows-x64-portable
+          path: OpenMotion-GLOC-Windows-x64.zip
+          retention-days: 30

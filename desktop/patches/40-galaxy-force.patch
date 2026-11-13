@@ -1,0 +1,237 @@
+--- a/src/mame/sega/segaybd.cpp
++++ b/src/mame/sega/segaybd.cpp
+@@ -3,6 +3,9 @@
+ /***************************************************************************
+ 
+     Sega Y-board hardware
++
++    OpenMotion G-LOC output adapter: experimental gforce2gloc clone.
++    Based on MAME 0.276; original game handlers remain unchanged.
+ 
+ ****************************************************************************
+ 
+@@ -324,6 +327,9 @@
+ {
+ 	m_irq2_scanline = 170;
+ 	m_scanline_timer->adjust(m_screen->time_until_pos(223), 223);
++
++	if (m_gforce2_gloc)
++		gforce2_gloc_neutral();
+ }
+ 
+ 
+@@ -455,6 +461,41 @@
+ void segaybd_state::gforce2_output_cb2(uint16_t data)
+ {
+ 	m_start_lamp = BIT(data, 2);
++}
++
++
++//-------------------------------------------------
++//  gforce2gloc - converted-ROM output adapter
++//-------------------------------------------------
++
++void segaybd_state::gforce2_gloc_neutral()
++{
++	m_right_motor_position = 0x10;
++	m_left_motor_position = 0x50;
++	m_right_motor_position_nor = 16;
++	m_left_motor_position_nor = 16;
++	m_right_motor_speed = 0;
++	m_left_motor_speed = 0;
++}
++
++INPUT_CHANGED_MEMBER(segaybd_state::gforce2_gloc_enable_changed)
++{
++	// Clear previous targets on either edge of the development switch.
++	gforce2_gloc_neutral();
++}
++
++void segaybd_state::gforce2_gloc_output_cb1(uint16_t data)
++{
++	// Native Galaxy Force commands overlap the G-LOC command ranges.
++	// Enable only when a converted ROM emits the G-LOC byte protocol.
++	if (!(ioport("GLOCMOTION")->read() & 1))
++	{
++		gforce2_gloc_neutral();
++		return;
++	}
++
++	// Preserve upstream raw/normalised positions, speeds and filtering.
++	gloc_output_cb1(data & 0xff);
+ }
+ 
+ 
+@@ -970,6 +1011,24 @@
+ INPUT_PORTS_END
+ 
+ 
++// Development clone: GFII controls and Super Deluxe cabinet selection.
++static INPUT_PORTS_START( gforce2gloc )
++	PORT_INCLUDE( gforce2 )
++
++	PORT_MODIFY("DSW")
++	PORT_DIPNAME( 0xc0, 0xc0, DEF_STR( Cabinet ) ) PORT_DIPLOCATION("SWB:7,8")
++	PORT_DIPSETTING(    0xc0, "Super Deluxe" )
++	PORT_DIPSETTING(    0x80, "Deluxe" )
++	PORT_DIPSETTING(    0x40, DEF_STR( Upright ) )
++	PORT_DIPSETTING(    0x00, "City" )
++
++	PORT_START("GLOCMOTION")
++	PORT_CONFNAME( 0x01, 0x00, "G-LOC Motion Decoder" ) PORT_CHANGED_MEMBER(DEVICE_SELF, FUNC(segaybd_state::gforce2_gloc_enable_changed), 0)
++	PORT_CONFSETTING(    0x00, "Disabled" )
++	PORT_CONFSETTING(    0x01, "Enabled (converted ROM only)" )
++INPUT_PORTS_END
++
++
+ static INPUT_PORTS_START( gloc )
+ 	PORT_INCLUDE( yboard_generic )
+ 
+@@ -1630,6 +1689,85 @@
+ 	ROM_RELOAD(                  0x160000, 0x20000 )
+ ROM_END
+ 
++
++// Development ROM definition currently matches the supplied original game set.
++// After the motion conversion, configure_roms.py updates the six 68000 checksums.
++// Shared graphics/sound can be obtained from the unmodified gforce2 parent set.
++ROM_START( gforce2gloc )
++	ROM_REGION( 0x080000, "maincpu", 0 ) // M
++	ROM_LOAD16_BYTE( "epr-11688.25",   0x000000, 0x20000, CRC(e2c2a8d0) SHA1(a237b971a296a8f06a8f4de3a5727182bad2d48c) )
++	ROM_LOAD16_BYTE( "epr-11687.24",   0x000001, 0x20000, CRC(eaafe98a) SHA1(82d959daaaad8a3463bf66acb34309af395eb89e) )
++
++	ROM_REGION( 0x040000, "subx", 0 ) // X
++	ROM_LOAD16_BYTE( "epr-11875.81",   0x000000, 0x20000, CRC(c81701c6) SHA1(00c269f18c5eded7a0e4b6354779cd80db827409) )
++	ROM_LOAD16_BYTE( "epr-11874.80",   0x000001, 0x20000, CRC(5301fd79) SHA1(60a751c168d519cd45a9575e138514d580bce9b6) )
++
++	ROM_REGION( 0x040000, "suby", 0 ) // Y
++	ROM_LOAD16_BYTE( "epr-11816b.54",   0x000000, 0x20000, CRC(d6ef371c) SHA1(65e65e58542f9d2b0df33e76d4008fcb2950d75b) )
++	ROM_LOAD16_BYTE( "epr-11815b.53",   0x000001, 0x20000, CRC(beff24fe) SHA1(eab53d23a5fc288cc84ad26f0b8da1ec6fdc8d00) )
++
++	ROM_REGION( 0x08000, "drive_board", 0 )
++	ROM_LOAD( "epr-11707.ic37",  0x00000, 0x08000, NO_DUMP )
++	ROM_LOAD( "epr-11707a.ic37", 0x00000, 0x08000, NO_DUMP )
++
++	ROM_REGION16_BE( 0x080000, "bsprites", 0 )
++	ROM_LOAD16_BYTE( "mpr-11467.16",   0x000000, 0x20000, CRC(6e60e736) SHA1(73086744cb2fe1ce162f851cb879755c21819b33) )
++	ROM_LOAD16_BYTE( "mpr-11468.14",   0x000001, 0x20000, CRC(74ca9ca5) SHA1(c6f27ce43ef270088e6155c8240fd15afa5729fd) )
++	ROM_LOAD16_BYTE( "epr-11694.17",   0x040000, 0x20000, CRC(7e297b84) SHA1(bbf1aa2b0b6b1f9fdaf9bea77d24b7f4f9320696) )
++	ROM_LOAD16_BYTE( "epr-11695.15",   0x040001, 0x20000, CRC(38a864be) SHA1(ef7d89511713d695f6a454c42f079d3507d9690d) )
++
++	ROM_REGION64_BE( 0x400000, "ysprites", 0)
++	ROM_LOAD64_BYTE( "mpr-11469.67",   0x000000, 0x20000, CRC(ed7a2299) SHA1(1aecf9ccba1fed0b7908008e798c522251a08b0f) )
++	ROM_LOAD64_BYTE( "mpr-11470.75",   0x000001, 0x20000, CRC(34dea550) SHA1(da95b8346c3530573461553629af4cc493bbb4af) )
++	ROM_LOAD64_BYTE( "mpr-11477.63",   0x000002, 0x20000, CRC(a2784653) SHA1(00a123d1fc8116ca678d6d8dbf1a5450feee014d) )
++	ROM_LOAD64_BYTE( "mpr-11478.71",   0x000003, 0x20000, CRC(8b778993) SHA1(015ae757d26cd6e69bdf79e237f62743a8f41e0c) )
++	ROM_LOAD64_BYTE( "mpr-11471.86",   0x000004, 0x20000, CRC(f1974069) SHA1(c8beb1a2ce430e3e6478c87c7053a58f8f31a140) )
++	ROM_LOAD64_BYTE( "mpr-11472.114",  0x000005, 0x20000, CRC(0d24409a) SHA1(ee00e23b0c548918b89dd48ed3f8b0370388659e) )
++	ROM_LOAD64_BYTE( "mpr-11479.82",   0x000006, 0x20000, CRC(ecd6138a) SHA1(bbc157a1f9b7e24d16e6f126d95c448736e83791) )
++	ROM_LOAD64_BYTE( "mpr-11480.110",  0x000007, 0x20000, CRC(64ad66c5) SHA1(aaab6999aa88b3340b16ee1188a8432477e16625) )
++
++	ROM_LOAD64_BYTE( "mpr-11473.66",   0x100000, 0x20000, CRC(0538c6ec) SHA1(9397db188f12cf8cd91841794134760f30f83893) )
++	ROM_LOAD64_BYTE( "mpr-11474.74",   0x100001, 0x20000, CRC(eb923c50) SHA1(f997d2bc7f674eae4243eaf640d8faffa41d9521) )
++	ROM_LOAD64_BYTE( "mpr-11481.62",   0x100002, 0x20000, CRC(78e652b6) SHA1(8c70609172908131fef8cbe05f810dbd3d120eba) )
++	ROM_LOAD64_BYTE( "mpr-11482.70",   0x100003, 0x20000, CRC(2f879766) SHA1(ca5835d0bb77fe7de83ad336a82111cb2f96cd41) )
++	ROM_LOAD64_BYTE( "mpr-11475.85",   0x100004, 0x20000, CRC(69cfec89) SHA1(db2a9b03fff727f198fb5cbfb9c281ac3bbc5623) )
++	ROM_LOAD64_BYTE( "mpr-11476.113",  0x100005, 0x20000, CRC(a60b9b79) SHA1(6e9aa51923c12f5658bd17deb6c032e08c91dade) )
++	ROM_LOAD64_BYTE( "mpr-11483.81",   0x100006, 0x20000, CRC(d5d3a505) SHA1(fa7662346b954d3faf0e8fcf138004231676845c) )
++	ROM_LOAD64_BYTE( "mpr-11484.109",  0x100007, 0x20000, CRC(b8a56a50) SHA1(ccbc391d6f60b88630d7a93b8bb6e365a8d59ed8) )
++
++	ROM_LOAD64_BYTE( "epr-11696.65",   0x200000, 0x20000, CRC(99e8e49e) SHA1(ab6e1d74af412ec2f939043d7dc26f4b2e34a528) )
++	ROM_LOAD64_BYTE( "epr-11697.73",   0x200001, 0x20000, CRC(7545c52e) SHA1(bdb0ccf233e10e9449aa367db5a5b5f209bee969) )
++	ROM_LOAD64_BYTE( "epr-11700.61",   0x200002, 0x20000, CRC(e13839c1) SHA1(4975b5314797d11c782b0478eaa84eaf9980b1cd) )
++	ROM_LOAD64_BYTE( "epr-11701.69",   0x200003, 0x20000, CRC(9fb3d365) SHA1(bfcf4abfa91aa41b16f01b7bafe97cd865167fbc) )
++	ROM_LOAD64_BYTE( "epr-11698.84",   0x200004, 0x20000, CRC(cfeba3e2) SHA1(826b73858ca5ea05688246d36b1f607356974ca9) )
++	ROM_LOAD64_BYTE( "epr-11699.112",  0x200005, 0x20000, CRC(4a00534a) SHA1(9a637b45b140420937b232bf690ef8bc3d43f5ad) )
++	ROM_LOAD64_BYTE( "epr-11702.80",   0x200006, 0x20000, CRC(2a09c627) SHA1(c6b0a618b4ddd9d227d3472544b62ebef966b041) )
++	ROM_LOAD64_BYTE( "epr-11703.108",  0x200007, 0x20000, CRC(43bb7d9f) SHA1(e36d208937f56f0af14292184c80ca939c32c378) )
++
++	ROM_LOAD64_BYTE( "epr-11524.64",   0x300000, 0x20000, CRC(5d35849f) SHA1(b86fb230ed0901dfdb525e7a47d9c9ad8031a3f6) )
++	ROM_LOAD64_BYTE( "epr-11525.72",   0x300001, 0x20000, CRC(9ae47552) SHA1(43268dd5f79282aabd8972994437de1b2d2acc40) )
++	ROM_LOAD64_BYTE( "epr-11532.60",   0x300002, 0x20000, CRC(b3565ddb) SHA1(3208744d43a11f4de8a6b626cc9113ad63d36807) )
++	ROM_LOAD64_BYTE( "epr-11533.68",   0x300003, 0x20000, CRC(f5d16e8a) SHA1(3b5c1582794a0e69707264879b544ac48afd9337) )
++	ROM_LOAD64_BYTE( "epr-11526.83",   0x300004, 0x20000, CRC(094cb3f0) SHA1(4b30e24dfd33c9922ffd5665cd9631b1f24243da) )
++	ROM_LOAD64_BYTE( "epr-11527.111",  0x300005, 0x20000, CRC(e821a144) SHA1(eeec0e51798645cce8f9a7e686178268398977fb) )
++	ROM_LOAD64_BYTE( "epr-11534.79",   0x300006, 0x20000, CRC(b7f0ad7c) SHA1(987b198692db365f3a81e88e5eec526775c318c6) )
++	ROM_LOAD64_BYTE( "epr-11535.107",  0x300007, 0x20000, CRC(95da7a46) SHA1(ffe6cd80eecc7c53a1155396ede0720d975d2c3b) )
++
++	ROM_REGION( 0x10000, "soundcpu", 0 )        // Z80 sound CPU
++	ROM_LOAD( "epr-11693.102",   0x000000, 0x10000, CRC(0497785c) SHA1(f077e71efdc96d6eb3f1a1f989650466554fb13a) ) // 11516A
++
++	ROM_REGION( 0x200000, "pcm", ROMREGION_ERASEFF )    // SegaPCM samples
++	ROM_LOAD( "mpr-11465.107",   0x000000, 0x80000, CRC(e1436dab) SHA1(363f4c111de38cb1d82b245e4fcc65308f506e6a) )
++	ROM_LOAD( "epr-11516.106",   0x080000, 0x20000, CRC(19d0e17f) SHA1(7171131226cf1fe260a2db310fad2ec264adca26) )
++	ROM_RELOAD(                  0x0a0000, 0x20000 )
++	ROM_RELOAD(                  0x0c0000, 0x20000 )
++	ROM_RELOAD(                  0x0e0000, 0x20000 )
++	ROM_LOAD( "epr-11814.105",   0x100000, 0x20000, CRC(0b05d376) SHA1(8d0c0be2fd9dbc714c82c7cd1c439d5ff65e1317) ) // 11517
++	ROM_RELOAD(                  0x120000, 0x20000 )
++	ROM_RELOAD(                  0x140000, 0x20000 )
++	ROM_RELOAD(                  0x160000, 0x20000 )
++ROM_END
++
+ //  Galaxy Force 2 (World, Super Deluxe unit), Sega Y-board
+ //  CPU: 68000 (317-????)
+ //
+@@ -2983,6 +3121,15 @@
+ 	m_output_cb2 = output_delegate(&segaybd_state::gforce2_output_cb2, this);
+ }
+ 
++void segaybd_state::init_gforce2_gloc()
++{
++	init_gforce2();
++	m_gforce2_gloc = true;
++	m_output_cb1 = output_delegate(&segaybd_state::gforce2_gloc_output_cb1, this);
++	// Keep Galaxy Force's Port H lamps and sound-mute behaviour.
++	gforce2_gloc_neutral();
++}
++
+ void segaybd_state::init_gloc()
+ {
+ 	// because some of the output data isn't fully understood we need to "center" the rams
+@@ -3022,6 +3169,7 @@
+ 
+ //    YEAR, NAME,      PARENT,   MACHINE,       INPUT,    STATE,         INIT,    MONITOR,COMPANY,FULLNAME,FLAGS,                                     LAYOUT
+ GAME( 1988, gforce2,   0,        yboard,        gforce2,  segaybd_state, init_gforce2, ROT0,   "Sega", "Galaxy Force 2", MACHINE_SUPPORTS_SAVE )
++GAME( 1988, gforce2gloc, gforce2, yboard,       gforce2gloc, segaybd_state, init_gforce2_gloc, ROT0, "Sega", "Galaxy Force 2 (G-LOC motion output development)", MACHINE_SUPPORTS_SAVE )
+ GAME( 1988, gforce2sd, gforce2,  yboard_deluxe, gforce2,  segaybd_state, init_gforce2, ROT0,   "Sega", "Galaxy Force 2 (Super Deluxe unit)", MACHINE_SUPPORTS_SAVE )
+ GAME( 1988, gforce2ja, gforce2,  yboard,        gforce2,  segaybd_state, init_gforce2, ROT0,   "Sega", "Galaxy Force 2 (Japan, Rev A)", MACHINE_SUPPORTS_SAVE )
+ GAME( 1988, gforce2j,  gforce2,  yboard,        gforce2,  segaybd_state, init_gforce2, ROT0,   "Sega", "Galaxy Force 2 (Japan)", MACHINE_SUPPORTS_SAVE )
+--- a/src/mame/sega/segaybd.h
++++ b/src/mame/sega/segaybd.h
+@@ -66,6 +66,8 @@
+ 	void init_pdrift();
+ 	void init_r360();
+ 	void init_gforce2();
++	void init_gforce2_gloc();
++	DECLARE_INPUT_CHANGED_MEMBER(gforce2_gloc_enable_changed);
+ 	void init_rchase();
+ 	void init_gloc();
+ 
+@@ -95,6 +97,8 @@
+ 	// game-specific output handlers
+ 	void gforce2_output_cb1(uint16_t data);
+ 	void gforce2_output_cb2(uint16_t data);
++	void gforce2_gloc_output_cb1(uint16_t data);
++	void gforce2_gloc_neutral();
+ 	void gloc_output_cb1(uint16_t data);
+ 	void gloc_output_cb2(uint16_t data);
+ 	void r360_output_cb2(uint16_t data);
+@@ -161,6 +165,7 @@
+ 	output_delegate m_output_cb2;
+ 
+ 	// internal state
++	bool m_gforce2_gloc = false; // fixed by the selected driver, not a runtime option
+ 	uint16_t m_pdrift_bank = 0;
+ 	emu_timer *m_scanline_timer = nullptr;
+ 	int m_irq2_scanline = 0;
+--- a/scripts/src/cpu.lua
++++ b/scripts/src/cpu.lua
+@@ -2080,6 +2080,7 @@
+ --------------------------------------------------
+ -- Motorola 68000 series
+ --@src/devices/cpu/m68000/m68000.h,CPUS["M680X0"] = true
++--@src/devices/cpu/m68000/m68000musashi.h,CPUS["M680X0"] = true
+ --@src/devices/cpu/m68000/m68008.h,CPUS["M680X0"] = true
+ --@src/devices/cpu/m68000/m68010.h,CPUS["M680X0"] = true
+ --@src/devices/cpu/m68000/m68020.h,CPUS["M680X0"] = true

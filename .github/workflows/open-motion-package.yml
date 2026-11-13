@@ -1,0 +1,72 @@
+name: Package Windows-ready Open Motion
+on:
+  push:
+    branches: [desktop/windows-prototype]
+    paths: [.github/workflows/open-motion-package.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  package:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-application
+          path: portable/OpenMotion
+          run-id: 43379342081
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: OpenMotion-Windows-x64-emulator-and-patches
+          path: updates
+          run-id: 43378553367
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assemble current launcher and validated emulator
+        shell: pwsh
+        run: |
+          python desktop/build/portable.py portable/OpenMotion updates/OpenMotion-MAME-0.276-v0.1.zip
+          Copy-Item updates/OpenMotion-Frozen-ROM-Patches.zip portable/OpenMotion/
+          @'
+          OPEN MOTION: G-LOC - WINDOWS TEST v0.1
+
+          Extract the complete folder and open OpenMotion.exe.
+          No Python, separate MAME installation or MAMEHooker is needed.
+
+          The custom emulator and all frozen ROM patch recipes are included:
+          Galaxy Force II 1.2; Wing War R360 0.3; After Burner II 0.2;
+          Space Harrier 0.1, both revisions.
+
+          Select a game, choose Import and select your complete original or
+          already converted ROM ZIP. The launcher installs a separate copy.
+          Then choose Play. The first launch is in monitor-only mode.
+
+          TAB inside MAME opens A-PAC/yoke/button bindings.
+          F6 cycles the in-game command overlay.
+          Controller setup is 115200 baud, 8N1. Choose its COM port in Setup.
+          Enable motion only after the controller is calibrated and ready.
+
+          All seven game registrations passed Windows MAME validation.
+          The launcher passed 21 tests and layout checks at 320x240 and 640x480.
+          Physical cabinet travel, polarity and limits still need a bench check.
+
+          Source, release information and authorship:
+          https://github.com/BertyB3/OpenMotionGLOC/pull/1
+          Complete matching MAME source is a separate artifact in build:
+          https://github.com/BertyB3/OpenMotionGLOC/actions/runs/43378553367
+
+          By Luke McMillan.
+          '@ | Set-Content portable/OpenMotion/START-HERE.txt
+          Copy-Item portable/OpenMotion/START-HERE.txt portable/OpenMotion/README.txt
+          Remove-Item portable/OpenMotion/README.md
+          Copy-Item .github/runtime-licenses portable/OpenMotion/licenses -Recurse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenMotion_GLOC_Windows_Test_v0_1
+          path: portable/OpenMotion
+          retention-days: 30

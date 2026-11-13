@@ -1,0 +1,32 @@
+[
+  {
+    "recipe": "aburner2-gloc-v0-2.json",
+    "program_preimages": "verified original CRCs",
+    "frozen_output": "byte-identical",
+    "chips": 28
+  },
+  {
+    "recipe": "sharrier-gloc-v0-1.json",
+    "program_preimages": "verified original CRCs",
+    "frozen_output": "byte-identical",
+    "chips": 51
+  },
+  {
+    "recipe": "sharrier1-gloc-v0-1.json",
+    "program_preimages": "verified original CRCs",
+    "frozen_output": "byte-identical",
+    "chips": 51
+  },
+  {
+    "recipe": "wingwar-gloc-v0-3.json",
+    "program_preimages": "verified original CRCs",
+    "frozen_output": "byte-identical",
+    "chips": 47
+  },
+  {
+    "recipe": "gforce2-gloc-v1-2.json",
+    "program_preimages": "verified original CRCs",
+    "frozen_output": "byte-identical",
+    "chips": 46
+  }
+]

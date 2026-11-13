@@ -1,0 +1,77 @@
+{
+  "game": "aburner2",
+  "version": "0.2",
+  "chips": [
+    "epr-11107.58",
+    "epr-11108.63"
+  ],
+  "original_crc32": {
+    "epr-11107.58": "6d87bab7",
+    "epr-11108.63": "202a3e1d"
+  },
+  "patched_crc32": {
+    "epr-11107.58": "0e5fa34e",
+    "epr-11108.63": "d991cf41"
+  },
+  "patches": [
+    {
+      "offset": 102532,
+      "expected": "13c000140003",
+      "replacement": "4eb90003e000",
+      "label": "Native motion output trampoline"
+    },
+    {
+      "offset": 83160,
+      "expected": "13fc008800140003",
+      "replacement": "4eb90003e0d44e71",
+      "label": "Initial centre packet"
+    },
+    {
+      "offset": 253952,
+      "expected": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "replacement": "13c00017000148e7ff8040e778107a107c020c79000f0029c09c6d0000840c7900160029c09c6e0000784a388bf26600007041fa00b630389062024000ff740014300000488230389064024000ff7600163000004883380398423a03da423c046a0244463e056a024447bc476c023c070c46000e6f0cc9fc000e89c6cbfc000e8bc606440010064500105246e24e52460c4600076f027c070c4600026c027c0213c50014000330060600002013c00014000330040600004013c00014000330060600006013c00014000344df4cdf01ff4a004e7548e7ff8040e713fc00880017000178107a107c0260b6f2f2f2f2f2f2f3f3f3f3f3f3f3f3f3f4f4f4f4f4f4f4f4f4f5f5f5f5f5f5f5f5f5f6f6f6f6f6f6f6f6f6f7f7f7f7f7f7f7f7f7f8f8f8f8f8f8f8f8f8f9f9f9f9f9f9f9f9f9f9fafafafafafafafafafbfbfbfbfbfbfbfbfbfcfcfcfcfcfcfcfcfcfdfdfdfdfdfdfdfdfdfefefefefefefefefeffffffffffffffffff000000000000000000010101010101010101020202020202020202030303030303030303040404040404040404050505050505050505060606060606060606070707070707070707070808080808080808080909090909090909090a0a0a0a0a0a0a0a0a0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0d0d0d0d0d0d0d0d0d0e0e0e0e0e",
+      "label": "Conversion routine including carrier-launch NPME"
+    },
+    {
+      "offset": 258032,
+      "expected": "ffffffffffffffff",
+      "replacement": "4142474c4f433031",
+      "label": "Driver family signature, compatible with v0.1 core"
+    }
+  ],
+  "previous_versions": [
+    {
+      "version": "0.1",
+      "crc32": {
+        "epr-11107.58": "0e5fa34e",
+        "epr-11108.63": "4efc247a"
+      },
+      "patches": [
+        {
+          "offset": 253973,
+          "expected": "10",
+          "replacement": "0f",
+          "label": "Enable native carrier-launch NPME"
+        }
+      ]
+    }
+  ],
+  "targetBounds": [
+    2,
+    30
+  ],
+  "nativePort": "140003",
+  "nativeMailbox": "170001",
+  "sourceTargets": [
+    "3f9062",
+    "3f9064"
+  ],
+  "motionModes": {
+    "carrierLaunch": 15,
+    "flightAndInGameNPME": [
+      16,
+      22
+    ]
+  },
+  "driverFamilySignature": "ABGLOC01"
+}

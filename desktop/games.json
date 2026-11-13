@@ -1,0 +1,51 @@
+[
+  {
+    "id": "gloc",
+    "label": "G-LOC",
+    "version": "Original",
+    "set": "gloc",
+    "recipe": null
+  },
+  {
+    "id": "strkfgtr",
+    "label": "Strike Fighter",
+    "version": "Original",
+    "set": "strkfgtr",
+    "recipe": null
+  },
+  {
+    "id": "gforce2gloc",
+    "label": "Galaxy Force II",
+    "version": "1.2 frozen",
+    "set": "gforce2gloc",
+    "recipe": "gforce2-gloc-v1-2.json"
+  },
+  {
+    "id": "aburner2",
+    "label": "After Burner II",
+    "version": "0.2 frozen",
+    "set": "aburner2",
+    "recipe": "aburner2-gloc-v0-2.json"
+  },
+  {
+    "id": "sharrierglc",
+    "label": "Space Harrier",
+    "version": "0.1 frozen",
+    "set": "sharrierglc",
+    "recipe": "sharrier-gloc-v0-1.json"
+  },
+  {
+    "id": "sharrier1glc",
+    "label": "Space Harrier (older)",
+    "version": "0.1 frozen",
+    "set": "sharrier1glc",
+    "recipe": "sharrier1-gloc-v0-1.json"
+  },
+  {
+    "id": "wingwar360",
+    "label": "Wing War R360",
+    "version": "0.3 frozen",
+    "set": "wingwar360",
+    "recipe": "wingwar-gloc-v0-3.json"
+  }
+]
