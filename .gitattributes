@@ -1,0 +1,3 @@
+# Keep build patches identical on Windows and Linux without changing firmware files.
+desktop/** text eol=lf
+.github/workflows/open-motion-desktop.yml text eol=lf
