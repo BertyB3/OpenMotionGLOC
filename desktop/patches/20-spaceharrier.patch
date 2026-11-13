@@ -1,0 +1,289 @@
+--- a/src/mame/sega/segahang.cpp
++++ b/src/mame/sega/segahang.cpp
+@@ -142,7 +142,7 @@
+ 	m_subcpu->set_input_line(INPUT_LINE_RESET, (data & 0x20) ? ASSERT_LINE : CLEAR_LINE);
+ 
+ 	// bits 2 & 3: ADC select
+-	m_adc_select = (data >> 2) & 3;
++	m_adc_select = (data >> 2) & (m_shlab ? 7 : 3);
+ }
+ 
+ 
+@@ -209,7 +209,11 @@
+ 
+ uint8_t segahang_state::analog_r()
+ {
+-	return m_adc_ports[m_adc_select].read_safe(0);
++	if (m_shlab) {
++  if (m_adc_select == 4 || m_adc_select == 5) return uint8_t(m_shlab_pos[m_adc_select-4]+0.5);
++  if (m_adc_select == 2 || m_adc_select == 3) return 128;
++ }
++ return m_adc_ports[m_adc_select & 3].read_safe(0);
+ }
+ 
+ 
+@@ -305,6 +309,8 @@
+ void segahang_state::machine_start()
+ {
+ 	m_lamps.resolve();
++ save_item(NAME(m_shlab_pos));
++ save_item(NAME(m_shlab_native));
+ 
+ 	m_i8751_sync_timer = timer_alloc(FUNC(segahang_state::i8751_sync), this);
+ }
+@@ -324,6 +330,8 @@
+ 
+ 	// reset global state
+ 	m_adc_select = 0;
++ m_shlab_pos[0]=m_shlab_pos[1]=128;
++ m_shlab_native=0;
+ }
+ 
+ 
+@@ -1006,6 +1014,74 @@
+ //   834-5667-01 HANG ON REV.A
+ //   (FOR SIT-DOWN UP-RIGHT)
+ //
++
++// Open Motion G-Loc Space Harrier v0.1. Historical 8751 HLE expanded
++// with virtual analogue motor feedback. No genuine MCU ROM is substituted.
++void segahang_state::sharrierglc_map(address_map &map)
++{
++ sharrier_map(map);
++ map(0x160001,0x160001).w(FUNC(segahang_state::shlab_gloc_w));
++}
++void segahang_state::shlab_native_w(uint8_t data)
++{
++ m_shlab_native=data;
++ output().set_value("sharrier_native_motor",data);
++}
++uint8_t segahang_state::shlab_limits_r()
++{
++ unsigned v=63;
++ if(m_shlab_pos[1]<=16)v&=~1; if(m_shlab_pos[1]>=240)v&=~4;
++ if(m_shlab_pos[0]<=16)v&=~8; if(m_shlab_pos[0]>=240)v&=~32;
++ if(m_shlab_pos[1]>=125&&m_shlab_pos[1]<=131)v&=~2;
++ if(m_shlab_pos[0]>=125&&m_shlab_pos[0]<=131)v&=~16;
++ return v | (m_adc->intr_r()<<6);
++}
++INTERRUPT_GEN_MEMBER(segahang_state::shlab_vblank)
++{
++ for(int i=0;i<2;i++) {
++  int n=(m_shlab_native>>(i*4))&15;
++  if(n&&n!=8)m_shlab_pos[i]+=0.75*(n-8);
++  if(m_shlab_pos[i]<16)m_shlab_pos[i]=16;
++  if(m_shlab_pos[i]>240)m_shlab_pos[i]=240;
++ }
++ m_workram[0x492/2]=(ioport("ADC0")->read()<<8)|ioport("ADC1")->read();
++ m_workram[0x494/2]=0x8080;
++ m_workram[0x496/2]=(uint8_t(m_shlab_pos[0]+0.5)<<8)|uint8_t(m_shlab_pos[1]+0.5);
++ output().set_value("sharrier_bank_feedback",uint8_t(m_shlab_pos[0]+0.5));
++ output().set_value("sharrier_pitch_feedback",uint8_t(m_shlab_pos[1]+0.5));
++ output().set_value("sharrier_switches",shlab_limits_r()&63);
++ m_maincpu->set_input_line(4,HOLD_LINE);
++}
++void segahang_state::shlab_gloc_w(uint8_t data)
++{
++ output().set_value("gloc_command",data);
++ const unsigned v=data&63;
++ const bool q=data&64;
++ if(data>127)return;
++ if(v>=2&&v<=30) {
++  output().set_value(q?"left_motor_position":"right_motor_position",data);
++  output().set_value(q?"left_motor_position_nor":"right_motor_position_nor",v);
++  output().set_value(q?"gloc_q_target":"gloc_r_target",32-v);
++ } else if(v>=34&&v<=39) output().set_value(q?"left_motor_speed":"right_motor_speed",v-32);
++}
++void segahang_state::sharrierglc(machine_config &config)
++{
++ sharrier_base(config);
++ sound_board_2203(config);
++ m_shlab=true;
++ m_maincpu->set_addrmap(AS_PROGRAM,&segahang_state::sharrierglc_map);
++ m_maincpu->set_vblank_int("screen",FUNC(segahang_state::shlab_vblank));
++ m_i8255[1]->out_pb_callback().set(FUNC(segahang_state::shlab_native_w));
++ m_i8255[1]->in_pc_callback().set(FUNC(segahang_state::shlab_limits_r));
++}
++static INPUT_PORTS_START(sharrierglc)
++ PORT_INCLUDE(sharrier)
++ PORT_MODIFY("DSW")
++ PORT_DIPNAME(0x01,0x01,DEF_STR(Cabinet)) PORT_DIPLOCATION("SWB:1")
++ PORT_DIPSETTING(0x00,DEF_STR(Upright))
++ PORT_DIPSETTING(0x01,"Moving")
++INPUT_PORTS_END
++
+ ROM_START( hangon )
+ 	ROM_REGION( 0x40000, "maincpu", 0 ) // 68000 code
+ 	ROM_LOAD16_BYTE( "epr-6918a.ic22", 0x000000, 0x8000, CRC(20b1c2b0) SHA1(01b4f5105e2bbeb6ec6dbd18bfb728e3a973e0ca) )
+@@ -2314,3 +2390,145 @@
+ 
+ GAME( 1986, endurord,   enduror,  endurord,  enduror,  segahang_state, init_sharrier, ROT0,  "bootleg",        "Enduro Racer (bootleg of Rev A, YM2151, FD1089B 317-0013A set)",      0 )
+ GAME( 1986, enduror1d,  enduror,  enduror1d, enduror,  segahang_state, init_sharrier, ROT0,  "bootleg",        "Enduro Racer (bootleg of YM2203, FD1089B 317-0013A set)",             0 )
++
++ROM_START( sharrierglc )
++	ROM_REGION( 0x40000, "maincpu", 0 ) // 68000 code
++	ROM_LOAD16_BYTE( "epr-7188a.ic97", 0x000000, 0x8000, CRC(f711fcbe) SHA1(68782063f8321571568ef1460edb37e4bc1deea3) )
++	ROM_LOAD16_BYTE( "epr-7184a.ic84", 0x000001, 0x8000, CRC(8875c220) SHA1(2475b5658e4a121d3cbb4fae319e013cfb6d1ee5) )
++	ROM_LOAD16_BYTE( "epr-7189.ic98",  0x010000, 0x8000, CRC(40b1309f) SHA1(9b050983f043a88f414745d02c912b59bbf1b121) )
++	ROM_LOAD16_BYTE( "epr-7185.ic85",  0x010001, 0x8000, CRC(ce78045c) SHA1(ce640f05bed64ff5b47f1064b5fc13e58bc422a4) )
++	ROM_LOAD16_BYTE( "epr-7190.ic99",  0x020000, 0x8000, CRC(f6391091) SHA1(3160b342b6447cccf67c932c7c1a42354cdfb058) )
++	ROM_LOAD16_BYTE( "epr-7186.ic86",  0x020001, 0x8000, CRC(79b367d7) SHA1(e901036b1b9fac460415d513837c8f852f7750b0) )
++	ROM_LOAD16_BYTE( "epr-7191.ic100", 0x030000, 0x8000, CRC(c9f16a0c) SHA1(0b002932279b6774506f4b716b9c049c723b4740) )
++	ROM_LOAD16_BYTE( "epr-7187.ic87",  0x030001, 0x8000, CRC(8ab745bc) SHA1(25c6085d9cd67e0e83eb4c7d7451c1d4cff973db) )
++
++	ROM_REGION( 0x40000, "subcpu", 0 ) // second 68000 CPU
++	ROM_LOAD16_BYTE( "epr-7182.ic54", 0x0000, 0x8000, CRC(d7c535b6) SHA1(c0659a678c0c3776387a4a675016e9a2e9c67ee3) )
++	ROM_LOAD16_BYTE( "epr-7183.ic67", 0x0001, 0x8000, CRC(a6153af8) SHA1(b56ba472e4afb474c7a3f7dc11d7428ebbe1a9c7) )
++
++	ROM_REGION( 0x18000, "gfx1", 0 ) // tiles
++	ROM_LOAD( "epr-7196.ic31", 0x00000, 0x08000, CRC(347fa325) SHA1(9076b16de9598b52a75e5084651ee5a220b0e88b) )
++	ROM_LOAD( "epr-7197.ic46", 0x08000, 0x08000, CRC(39d98bd1) SHA1(5aab91bdd08b0f1ea537cd43ccc2e82fd01dd031) )
++	ROM_LOAD( "epr-7198.ic60", 0x10000, 0x08000, CRC(3da3ea6b) SHA1(9a6ce304a14e6ef0be41d867284a63b941f960fb) )
++
++	ROM_REGION32_LE( 0x100000, "sprites", 0 ) // sprites
++	ROM_LOAD32_BYTE( "epr-7230.ic36", 0x00000, 0x8000, CRC(93e2d264) SHA1(ca56de13756ab77408506d88f291da1da8134435) )
++	ROM_LOAD32_BYTE( "epr-7222.ic28", 0x00001, 0x8000, CRC(edbf5fc3) SHA1(a93f8c431075741c181eb422b24c9303487ca16c) )
++	ROM_LOAD32_BYTE( "epr-7214.ic18", 0x00002, 0x8000, CRC(e8c537d8) SHA1(c9b3c0f33272c47d32e6aa349d72f7e355468e0e) )
++	ROM_LOAD32_BYTE( "epr-7206.ic8",  0x00003, 0x8000, CRC(22844fa4) SHA1(6d0f177082084c8c92085cd53e1d7ddc62d09a4c) )
++	ROM_LOAD32_BYTE( "epr-7229.ic35", 0x20000, 0x8000, CRC(cd6e7500) SHA1(6f0e42eb28ad3f5df93d8bb39dc41aba66eee144) )
++	ROM_LOAD32_BYTE( "epr-7221.ic27", 0x20001, 0x8000, CRC(41f25a9c) SHA1(bebbd4c4600028205aeff54190b32b664e4710d0) )
++	ROM_LOAD32_BYTE( "epr-7213.ic17", 0x20002, 0x8000, CRC(5bb09a67) SHA1(8bedefd2fa29a1a5e36f1d81c4e9067e3c7f28e9) )
++	ROM_LOAD32_BYTE( "epr-7205.ic7",  0x20003, 0x8000, CRC(dcaa2ebf) SHA1(9cf77bb966859febc5e5f1447cb719db64aa4db4) )
++	ROM_LOAD32_BYTE( "epr-7228.ic34", 0x40000, 0x8000, CRC(d5e15e66) SHA1(2bd81c5c736d725577adf85532de7802bef057f2) )
++	ROM_LOAD32_BYTE( "epr-7220.ic26", 0x40001, 0x8000, CRC(ac62ae2e) SHA1(d472dcc1d9b7889d04870920d5c6e5578597b8dc) )
++	ROM_LOAD32_BYTE( "epr-7212.ic16", 0x40002, 0x8000, CRC(9c782295) SHA1(c1627f3d849d2fdb02a590502bafbe133212b943) )
++	ROM_LOAD32_BYTE( "epr-7204.ic6",  0x40003, 0x8000, CRC(3711105c) SHA1(075197f614786f89bee28ed944371223bc75c9be) )
++	ROM_LOAD32_BYTE( "epr-7227.ic33", 0x60000, 0x8000, CRC(60d7c1bb) SHA1(19ddc1d8f269b50343266d508ad04d4c0fff69d1) )
++	ROM_LOAD32_BYTE( "epr-7219.ic25", 0x60001, 0x8000, CRC(f6330038) SHA1(805d4ed664972c0773c837d62f094858c1804148) )
++	ROM_LOAD32_BYTE( "epr-7211.ic15", 0x60002, 0x8000, CRC(60737b98) SHA1(5e91498bc473f099a1b2887baf980486e922af97) )
++	ROM_LOAD32_BYTE( "epr-7203.ic5",  0x60003, 0x8000, CRC(70fb5ebb) SHA1(38755a9be92865d2c5da8112d8d9c0fe8e778cff) )
++	ROM_LOAD32_BYTE( "epr-7226.ic32", 0x80000, 0x8000, CRC(6d7b5c97) SHA1(94c27e4ef1e197ee136f9399b07520cae00a366f) )
++	ROM_LOAD32_BYTE( "epr-7218.ic24", 0x80001, 0x8000, CRC(cebf797c) SHA1(d3d5aeba1a0e70a322ec86b930814fa8bc744829) )
++	ROM_LOAD32_BYTE( "epr-7210.ic14", 0x80002, 0x8000, CRC(24596a8b) SHA1(f580022c4f7dcaefb7209058c310a329479b5fcd) )
++	ROM_LOAD32_BYTE( "epr-7202.ic4",  0x80003, 0x8000, CRC(b537d082) SHA1(f87a644d9af8477c9eb94e5d3aeb5f6376264418) )
++	ROM_LOAD32_BYTE( "epr-7225.ic31", 0xa0000, 0x8000, CRC(5e784271) SHA1(063bd83b7f42dec556a7bdf736cb51456ba7184b) )
++	ROM_LOAD32_BYTE( "epr-7217.ic23", 0xa0001, 0x8000, CRC(510e5e10) SHA1(47b9f1bc8df0690c37d1d045bd361f8599e8a903) )
++	ROM_LOAD32_BYTE( "epr-7209.ic13", 0xa0002, 0x8000, CRC(7a2dad15) SHA1(227865447027f8669aa0d06d059f3d61da6d59dd) )
++	ROM_LOAD32_BYTE( "epr-7201.ic3",  0xa0003, 0x8000, CRC(f5ba4e08) SHA1(443b07c996cbb213fe57dfdd3879c1d4da27c001) )
++	ROM_LOAD32_BYTE( "epr-7224.ic30", 0xc0000, 0x8000, CRC(ec42c9ef) SHA1(313d908f3a964529b18e09825552879817a2e159) )
++	ROM_LOAD32_BYTE( "epr-7216.ic22", 0xc0001, 0x8000, CRC(6d4a7d7a) SHA1(997ac38e47d84f0166ca3ece50ac5f2d3435d8d3) )
++	ROM_LOAD32_BYTE( "epr-7208.ic12", 0xc0002, 0x8000, CRC(0f732717) SHA1(6a19c88d5d52f4ec4adb32c511fed4caae81c65f) )
++	ROM_LOAD32_BYTE( "epr-7200.ic2",  0xc0003, 0x8000, CRC(fc3bf8f3) SHA1(d9168b9bce110bfd531410179a107895c641e105) )
++	ROM_LOAD32_BYTE( "epr-7223.ic29", 0xe0000, 0x8000, CRC(ed51fdc4) SHA1(a2696b15a0911ac3b6b330b7d8df58ca51d629de) )
++	ROM_LOAD32_BYTE( "epr-7215.ic21", 0xe0001, 0x8000, CRC(dfe75f3d) SHA1(ff908419066494bc28cbd6afe72bd30350b20c4b) )
++	ROM_LOAD32_BYTE( "epr-7207.ic11", 0xe0002, 0x8000, CRC(a2c07741) SHA1(747c029ab399c4110dbe360b8913f5c2e57c87cc) )
++	ROM_LOAD32_BYTE( "epr-7199.ic1",  0xe0003, 0x8000, CRC(b191e22f) SHA1(406c7f4eed0b8fe93fa0bef370e496894f4d46a4) )
++
++	ROM_REGION( 0x8000, "segaic16road", 0 ) // road gfx
++	ROM_LOAD( "epr-7181.ic2", 0x0000, 0x8000, CRC(b4740419) SHA1(8ece2dc85692e32d0ba0b427c260c3d10ac0b7cc) )
++
++	ROM_REGION( 0x10000, "soundcpu", 0 ) // sound CPU
++	ROM_LOAD( "epr-7234.ic73", 0x00000, 0x004000, CRC(d6397933) SHA1(b85bb47efb6c113b3676b10ab86f1798a89d45b4) )
++	ROM_LOAD( "epr-7233.ic72", 0x04000, 0x004000, CRC(504e76d9) SHA1(302af9101da01c97ca4be6acd21fb5b8e8f0b7ef) )
++
++	ROM_REGION( 0x10000, "pcm", 0 ) // Sega PCM sound data
++	ROM_LOAD( "epr-7231.ic5", 0x00000, 0x8000, CRC(871c6b14) SHA1(6d04ddc32fdf1db409cb519890821bd10fc9e58b) )
++	ROM_LOAD( "epr-7232.ic6", 0x08000, 0x8000, CRC(4b59340c) SHA1(a01ba8580b65dd17bfd92560265e502d95d3ff16) )
++	// 8751 is explicitly replaced by the Lab HLE.
++
++	ROM_REGION( 0x2000, "sprites:zoom", 0 ) // zoom table
++	ROM_LOAD( "epr-6844.ic123", 0x0000, 0x2000, CRC(e3ec7bd6) SHA1(feec0fe664e16fac0fde61cf64b401b9b0575323) )
++ROM_END
++GAME(1985,sharrierglc,sharrier,sharrierglc,sharrierglc,segahang_state,init_sharrier,ROT0,"Sega / Open Motion G-Loc","Space Harrier (Rev A, G-LOC motion v0.1, MCU HLE)",MACHINE_SUPPORTS_SAVE)
++
++ROM_START( sharrier1glc )
++	ROM_REGION( 0x40000, "maincpu", 0 ) // 68000 code
++	ROM_LOAD16_BYTE( "epr-7188.ic97",  0x000000, 0x8000, CRC(cec02f4b) SHA1(29d52915ac8f8375c0b818064502cd7cd20c7adf) )
++	ROM_LOAD16_BYTE( "epr-7184.ic84",  0x000001, 0x8000, CRC(7f3826c0) SHA1(f2419962ac0577ad35fd5bf576e632c14bd7c97a) )
++	ROM_LOAD16_BYTE( "epr-7189.ic98",  0x010000, 0x8000, CRC(40b1309f) SHA1(9b050983f043a88f414745d02c912b59bbf1b121) )
++	ROM_LOAD16_BYTE( "epr-7185.ic85",  0x010001, 0x8000, CRC(ce78045c) SHA1(ce640f05bed64ff5b47f1064b5fc13e58bc422a4) )
++	ROM_LOAD16_BYTE( "epr-7190.ic99",  0x020000, 0x8000, CRC(f6391091) SHA1(3160b342b6447cccf67c932c7c1a42354cdfb058) )
++	ROM_LOAD16_BYTE( "epr-7186.ic86",  0x020001, 0x8000, CRC(79b367d7) SHA1(e901036b1b9fac460415d513837c8f852f7750b0) )
++	ROM_LOAD16_BYTE( "epr-7191.ic100", 0x030000, 0x8000, CRC(c9f16a0c) SHA1(0b002932279b6774506f4b716b9c049c723b4740) )
++	ROM_LOAD16_BYTE( "epr-7187.ic87",  0x030001, 0x8000, CRC(8ab745bc) SHA1(25c6085d9cd67e0e83eb4c7d7451c1d4cff973db) )
++
++	ROM_REGION( 0x40000, "subcpu", 0 ) // second 68000 CPU
++	ROM_LOAD16_BYTE( "epr-7182.ic54", 0x0000, 0x8000, CRC(d7c535b6) SHA1(c0659a678c0c3776387a4a675016e9a2e9c67ee3) )
++	ROM_LOAD16_BYTE( "epr-7183.ic67", 0x0001, 0x8000, CRC(a6153af8) SHA1(b56ba472e4afb474c7a3f7dc11d7428ebbe1a9c7) )
++
++	ROM_REGION( 0x18000, "gfx1", 0 ) // tiles
++	ROM_LOAD( "epr-7196.ic31", 0x00000, 0x08000, CRC(347fa325) SHA1(9076b16de9598b52a75e5084651ee5a220b0e88b) )
++	ROM_LOAD( "epr-7197.ic46", 0x08000, 0x08000, CRC(39d98bd1) SHA1(5aab91bdd08b0f1ea537cd43ccc2e82fd01dd031) )
++	ROM_LOAD( "epr-7198.ic60", 0x10000, 0x08000, CRC(3da3ea6b) SHA1(9a6ce304a14e6ef0be41d867284a63b941f960fb) )
++
++	ROM_REGION32_LE( 0x100000, "sprites", 0 ) // sprites
++	ROM_LOAD32_BYTE( "epr-7230.ic36", 0x00000, 0x8000, CRC(93e2d264) SHA1(ca56de13756ab77408506d88f291da1da8134435) )
++	ROM_LOAD32_BYTE( "epr-7222.ic28", 0x00001, 0x8000, CRC(edbf5fc3) SHA1(a93f8c431075741c181eb422b24c9303487ca16c) )
++	ROM_LOAD32_BYTE( "epr-7214.ic18", 0x00002, 0x8000, CRC(e8c537d8) SHA1(c9b3c0f33272c47d32e6aa349d72f7e355468e0e) )
++	ROM_LOAD32_BYTE( "epr-7206.ic8",  0x00003, 0x8000, CRC(22844fa4) SHA1(6d0f177082084c8c92085cd53e1d7ddc62d09a4c) )
++	ROM_LOAD32_BYTE( "epr-7229.ic35", 0x20000, 0x8000, CRC(cd6e7500) SHA1(6f0e42eb28ad3f5df93d8bb39dc41aba66eee144) )
++	ROM_LOAD32_BYTE( "epr-7221.ic27", 0x20001, 0x8000, CRC(41f25a9c) SHA1(bebbd4c4600028205aeff54190b32b664e4710d0) )
++	ROM_LOAD32_BYTE( "epr-7213.ic17", 0x20002, 0x8000, CRC(5bb09a67) SHA1(8bedefd2fa29a1a5e36f1d81c4e9067e3c7f28e9) )
++	ROM_LOAD32_BYTE( "epr-7205.ic7",  0x20003, 0x8000, CRC(dcaa2ebf) SHA1(9cf77bb966859febc5e5f1447cb719db64aa4db4) )
++	ROM_LOAD32_BYTE( "epr-7228.ic34", 0x40000, 0x8000, CRC(d5e15e66) SHA1(2bd81c5c736d725577adf85532de7802bef057f2) )
++	ROM_LOAD32_BYTE( "epr-7220.ic26", 0x40001, 0x8000, CRC(ac62ae2e) SHA1(d472dcc1d9b7889d04870920d5c6e5578597b8dc) )
++	ROM_LOAD32_BYTE( "epr-7212.ic16", 0x40002, 0x8000, CRC(9c782295) SHA1(c1627f3d849d2fdb02a590502bafbe133212b943) )
++	ROM_LOAD32_BYTE( "epr-7204.ic6",  0x40003, 0x8000, CRC(3711105c) SHA1(075197f614786f89bee28ed944371223bc75c9be) )
++	ROM_LOAD32_BYTE( "epr-7227.ic33", 0x60000, 0x8000, CRC(60d7c1bb) SHA1(19ddc1d8f269b50343266d508ad04d4c0fff69d1) )
++	ROM_LOAD32_BYTE( "epr-7219.ic25", 0x60001, 0x8000, CRC(f6330038) SHA1(805d4ed664972c0773c837d62f094858c1804148) )
++	ROM_LOAD32_BYTE( "epr-7211.ic15", 0x60002, 0x8000, CRC(60737b98) SHA1(5e91498bc473f099a1b2887baf980486e922af97) )
++	ROM_LOAD32_BYTE( "epr-7203.ic5",  0x60003, 0x8000, CRC(70fb5ebb) SHA1(38755a9be92865d2c5da8112d8d9c0fe8e778cff) )
++	ROM_LOAD32_BYTE( "epr-7226.ic32", 0x80000, 0x8000, CRC(6d7b5c97) SHA1(94c27e4ef1e197ee136f9399b07520cae00a366f) )
++	ROM_LOAD32_BYTE( "epr-7218.ic24", 0x80001, 0x8000, CRC(cebf797c) SHA1(d3d5aeba1a0e70a322ec86b930814fa8bc744829) )
++	ROM_LOAD32_BYTE( "epr-7210.ic14", 0x80002, 0x8000, CRC(24596a8b) SHA1(f580022c4f7dcaefb7209058c310a329479b5fcd) )
++	ROM_LOAD32_BYTE( "epr-7202.ic4",  0x80003, 0x8000, CRC(b537d082) SHA1(f87a644d9af8477c9eb94e5d3aeb5f6376264418) )
++	ROM_LOAD32_BYTE( "epr-7225.ic31", 0xa0000, 0x8000, CRC(5e784271) SHA1(063bd83b7f42dec556a7bdf736cb51456ba7184b) )
++	ROM_LOAD32_BYTE( "epr-7217.ic23", 0xa0001, 0x8000, CRC(510e5e10) SHA1(47b9f1bc8df0690c37d1d045bd361f8599e8a903) )
++	ROM_LOAD32_BYTE( "epr-7209.ic13", 0xa0002, 0x8000, CRC(7a2dad15) SHA1(227865447027f8669aa0d06d059f3d61da6d59dd) )
++	ROM_LOAD32_BYTE( "epr-7201.ic3",  0xa0003, 0x8000, CRC(f5ba4e08) SHA1(443b07c996cbb213fe57dfdd3879c1d4da27c001) )
++	ROM_LOAD32_BYTE( "epr-7224.ic30", 0xc0000, 0x8000, CRC(ec42c9ef) SHA1(313d908f3a964529b18e09825552879817a2e159) )
++	ROM_LOAD32_BYTE( "epr-7216.ic22", 0xc0001, 0x8000, CRC(6d4a7d7a) SHA1(997ac38e47d84f0166ca3ece50ac5f2d3435d8d3) )
++	ROM_LOAD32_BYTE( "epr-7208.ic12", 0xc0002, 0x8000, CRC(0f732717) SHA1(6a19c88d5d52f4ec4adb32c511fed4caae81c65f) )
++	ROM_LOAD32_BYTE( "epr-7200.ic2",  0xc0003, 0x8000, CRC(fc3bf8f3) SHA1(d9168b9bce110bfd531410179a107895c641e105) )
++	ROM_LOAD32_BYTE( "epr-7223.ic29", 0xe0000, 0x8000, CRC(ed51fdc4) SHA1(a2696b15a0911ac3b6b330b7d8df58ca51d629de) )
++	ROM_LOAD32_BYTE( "epr-7215.ic21", 0xe0001, 0x8000, CRC(dfe75f3d) SHA1(ff908419066494bc28cbd6afe72bd30350b20c4b) )
++	ROM_LOAD32_BYTE( "epr-7207.ic11", 0xe0002, 0x8000, CRC(a2c07741) SHA1(747c029ab399c4110dbe360b8913f5c2e57c87cc) )
++	ROM_LOAD32_BYTE( "epr-7199.ic1",  0xe0003, 0x8000, CRC(b191e22f) SHA1(406c7f4eed0b8fe93fa0bef370e496894f4d46a4) )
++
++	ROM_REGION( 0x8000, "segaic16road", 0 ) // road gfx
++	ROM_LOAD( "epr-7181.ic2", 0x0000, 0x8000, CRC(b4740419) SHA1(8ece2dc85692e32d0ba0b427c260c3d10ac0b7cc) )
++
++	ROM_REGION( 0x10000, "soundcpu", 0 ) // sound CPU
++	ROM_LOAD( "epr-7234.ic73", 0x00000, 0x004000, CRC(d6397933) SHA1(b85bb47efb6c113b3676b10ab86f1798a89d45b4) )
++	ROM_LOAD( "epr-7233.ic72", 0x04000, 0x004000, CRC(504e76d9) SHA1(302af9101da01c97ca4be6acd21fb5b8e8f0b7ef) )
++
++	ROM_REGION( 0x10000, "pcm", 0 ) // Sega PCM sound data
++	ROM_LOAD( "epr-7231.ic5", 0x00000, 0x8000, CRC(871c6b14) SHA1(6d04ddc32fdf1db409cb519890821bd10fc9e58b) )
++	ROM_LOAD( "epr-7232.ic6", 0x08000, 0x8000, CRC(4b59340c) SHA1(a01ba8580b65dd17bfd92560265e502d95d3ff16) )
++	// 8751 is explicitly replaced by the Lab HLE.
++
++	ROM_REGION( 0x2000, "sprites:zoom", 0 ) // zoom table
++	ROM_LOAD( "epr-6844.ic123", 0x0000, 0x2000, CRC(e3ec7bd6) SHA1(feec0fe664e16fac0fde61cf64b401b9b0575323) )
++ROM_END
++GAME(1985,sharrier1glc,sharrier1,sharrierglc,sharrierglc,segahang_state,init_sharrier,ROT0,"Sega / Open Motion G-Loc","Space Harrier (original revision, G-LOC motion v0.1, MCU HLE)",MACHINE_SUPPORTS_SAVE)
+--- a/src/mame/sega/segahang.h
++++ b/src/mame/sega/segahang.h
+@@ -60,6 +60,7 @@
+ 	void enduror1d(machine_config &config);
+ 	void endurord(machine_config &config);
+ 	void sharrier(machine_config &config);
++ void sharrierglc(machine_config &config);
+ 	void endurobl(machine_config &config);
+ 	void enduror1(machine_config &config);
+ 	void hangon(machine_config &config);
+@@ -92,6 +93,15 @@
+ 
+ 	// ADC0804 read handler
+ 	uint8_t analog_r();
++ void sharrierglc_map(address_map &map) ATTR_COLD;
++ INTERRUPT_GEN_MEMBER(shlab_vblank);
++ void shlab_native_w(uint8_t data);
++ uint8_t shlab_limits_r();
++ void shlab_gloc_w(uint8_t data);
++ bool m_shlab = false;
++ double m_shlab_pos[2] = {128,128};
++ uint8_t m_shlab_native = 0;
++
+ 
+ 	// Z80 sound CPU read/write handlers
+ 	uint8_t sound_data_r();

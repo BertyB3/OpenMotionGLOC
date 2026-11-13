@@ -1,0 +1,19 @@
+--- a/src/mame/mame.lst
++++ b/src/mame/mame.lst
+@@ -40593,6 +40593,8 @@
+ zektor
+ 
+ @source:sega/segahang.cpp
++sharrierglc
++sharrier1glc
+ endurob2
+ endurobl
+ enduror
+@@ -41103,6 +41105,7 @@
+ thndrbldd
+ 
+ @source:sega/segaybd.cpp
++gforce2gloc
+ gforce2
+ gforce2j
+ gforce2ja

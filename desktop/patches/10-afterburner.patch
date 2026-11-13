@@ -1,0 +1,203 @@
+--- a/src/mame/sega/segaxbd.cpp
++++ b/src/mame/sega/segaxbd.cpp
+@@ -267,6 +267,9 @@
+ 
+ #include "emu.h"
+ #include "segaxbd.h"
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++#endif
+ #include "segaipt.h"
+ 
+ #include "machine/adc0804.h"
+@@ -337,11 +340,14 @@
+ 	save_item(NAME(m_vblank_irq_state));
+ 	save_item(NAME(m_pc_0));
+ 	save_item(NAME(m_lastsurv_mux));
++	save_item(NAME(m_ab_position));
++	save_item(NAME(m_ab_native));
+ }
+ 
+ void segaxbd_state::device_reset()
+ {
+ 	m_segaic16vid->tilemap_reset(*m_screen);
++	m_ab_native=0x88; m_ab_position[0]=m_ab_position[1]=128.0;
+ 
+ 	// start timers to track interrupts
+ 	m_scanline_timer->adjust(m_screen->time_until_pos(0), 0);
+@@ -476,6 +482,9 @@
+ 	// on the write, latch the selected input port and stash the value
+ 	const int which = (m_pc_0 >> 2) & 7;
+ 	uint8_t value = m_adc_ports[which].read_safe(0x10);
++	// Emulated feedback potentiometers: ADC4 bank, ADC3 pitch.
++	if (m_ab_active && (which==3 || which==4))
++		value = 0x50 + int((255.0-m_ab_position[which==4?0:1])*96.0/255.0+0.5);
+ 
+ 	// reverse some port values
+ 	if (m_adc_reverse[which])
+@@ -590,6 +599,38 @@
+ //  DRIVER OVERRIDES
+ //**************************************************************************
+ 
++
++// Browser inputs and diagnostics are independent of the ROM conversion.
++#ifdef __EMSCRIPTEN__
++namespace {
++ running_machine *ab_machine=nullptr;
++ int ab_mask=0,ab_x=128,ab_y=128,ab_throttle=128,ab_frame=0,ab_start=-1;
++ void ab_field(running_machine &m,const char *tag,unsigned mask,int value) {
++  auto p=m.root_device().ioport(tag);if(p){auto f=p->field(mask);if(f)f->set_value(value);}
++ }
++}
++extern "C" {
++ EMSCRIPTEN_KEEPALIVE void lab_input(int mask,int x,int y,int throttle){ab_mask=mask;ab_x=x;ab_y=y;ab_throttle=throttle;}
++ EMSCRIPTEN_KEEPALIVE void lab_start_flight(){ab_start=ab_frame;}
++ EMSCRIPTEN_KEEPALIVE void lab_pause(int pause){if(ab_machine){if(pause)ab_machine->pause();else ab_machine->resume();}}
++ EMSCRIPTEN_KEEPALIVE void lab_mute(int mute){if(ab_machine)ab_machine->sound().ui_mute(mute);}
++}
++void ab_lab_frame(running_machine &m) {
++ ab_machine=&m;++ab_frame;int mask=ab_mask;
++ if(ab_start>=0){auto *cpu=m.device<cpu_device>(":mainpcb:maincpu");if(cpu->space(AS_PROGRAM).read_word(0x29c09c)<1)ab_start=ab_frame;int f=ab_frame-ab_start;if(f>=30&&f<40)mask|=1;if(f>=150&&f<160)mask|=8;if(f>=210)ab_start=-1;}
++ ab_field(m,":mainpcb:IO1PORTA",64,mask&1?1:0);
++ ab_field(m,":mainpcb:IO1PORTA",128,mask&2?1:0);
++ ab_field(m,":mainpcb:IO1PORTA",4,mask&4?1:0);
++ ab_field(m,":mainpcb:IO1PORTA",8,mask&8?1:0);
++ ab_field(m,":mainpcb:IO1PORTA",16,mask&16?1:0);
++ ab_field(m,":mainpcb:IO1PORTA",32,mask&32?1:0);
++ ab_field(m,":mainpcb:ADC0",255,ab_x);ab_field(m,":mainpcb:ADC1",255,ab_y);ab_field(m,":mainpcb:ADC2",255,ab_throttle);
++ if(ab_frame%3==0){auto *pcb=m.device<segaxbd_state>(":mainpcb");auto &sp=pcb->m_maincpu->space(AS_PROGRAM);
++  EM_ASM({if(Module.onLabFrame)Module.onLabFrame($0,$1,$2,$3,$4,$5,$6,$7,$8,$9);},ab_frame,ab_start>=0,sp.read_word(0x3f9062),sp.read_word(0x3f9064),int(pcb->m_ab_position[0]),int(pcb->m_ab_position[1]),pcb->m_ab_native,pcb->aburner2_limits(),sp.read_word(0x29c09c),sp.read_byte(0x3f8bf2));
++ }
++}
++#endif
++
+ //-------------------------------------------------
+ //  scanline_tick
+ //-------------------------------------------------
+@@ -605,6 +646,10 @@
+ 	// set VBLANK on scanline 223
+ 	if (scanline == 223)
+ 	{
++		if(m_ab_active)aburner2_motion_tick();
++#ifdef __EMSCRIPTEN__
++		ab_lab_frame(machine());
++#endif
+ 		m_vblank_irq_state = 1;
+ 		m_subcpu->set_input_line(4, ASSERT_LINE);
+ 		update_main_irqs();
+@@ -661,25 +706,58 @@
+ //  of I/O chip 0 for Afterburner II
+ //-------------------------------------------------
+ 
++// Virtual After Burner mechanics for emulator/bench use only. Rates are chosen
++// to exercise Sega's feedback loop, not measured physical actuator dynamics.
++uint8_t segaxbd_state::aburner2_limits() const
++{
++ uint8_t data=0; // 0=open/untripped; 1=closed endpoint, as tested by the ROM.
++ if(m_ab_position[0]<=16.0)data|=0x08;
++ if(m_ab_position[0]>=239.0)data|=0x20;
++ if(m_ab_position[1]<=16.0)data|=0x01;
++ if(m_ab_position[1]>=239.0)data|=0x04;
++ return data;
++}
+ uint8_t segaxbd_state::aburner2_motor_r()
+ {
+-	uint8_t data = m_io0_porta->read() & 0xc0;
+-
+-	// TODO
+-	return data | 0x3f;
+-}
+-
+-
+-//-------------------------------------------------
+-//  aburner2_motor_w - motor writes to port B
+-//  of I/O chip 0 for Afterburner II
+-//-------------------------------------------------
+-
++ return (m_io0_porta->read() & 0xc0) | aburner2_limits();
++}
++void segaxbd_state::aburner2_native_w(uint8_t data)
++{
++ // Emulator-only expansion mailbox written by the patched program.
++ m_ab_native=data;
++}
+ void segaxbd_state::aburner2_motor_w(uint8_t data)
+ {
+-	// TODO
+-}
+-
++ if(!m_ab_gloc) {
++  m_ab_native=data;
++#ifdef __EMSCRIPTEN__
++  EM_ASM({if(Module.onNative)Module.onNative($0);},data);
++#endif
++ }
++ if(m_ab_gloc) {
++  const int channel=data>>6, value=data&63;
++  if(data<128 && value<31) {
++   machine().output().set_value(channel?"left_motor_position":"right_motor_position",data);
++   machine().output().set_value(channel?"left_motor_position_nor":"right_motor_position_nor",value);
++   machine().output().set_value(channel?"gloc_q":"gloc_r",32-value);
++  } else if(data<128 && value>=33 && value<=39)
++   machine().output().set_value(channel?"left_motor_speed":"right_motor_speed",value-32);
++#ifdef __EMSCRIPTEN__
++  EM_ASM({if(Module.onMotion)Module.onMotion($0);},data);
++#endif
++ }
++}
++void segaxbd_state::aburner2_motion_tick()
++{
++ for(int i=0;i<2;i++) {
++  const int velocity=((m_ab_native>>(i*4))&15)-8;
++  m_ab_position[i]=std::max(0.0,std::min(255.0,m_ab_position[i]+velocity*1.5));
++ }
++ machine().output().set_value("ab_native_motor",m_ab_native);
++ machine().output().set_value("ab_bank_feedback",int(m_ab_position[0]));
++ machine().output().set_value("ab_pitch_feedback",int(m_ab_position[1]));
++ machine().output().set_value("ab_limits",aburner2_limits());
++}
+ 
+ //-------------------------------------------------
+ //  smgp_motor_r - motor reads from port A of
+@@ -928,6 +1006,7 @@
+ 	map(0x140000, 0x14000f).mirror(0x00fff0).rw(m_iochip[0], FUNC(cxd1095_device::read), FUNC(cxd1095_device::write)).umask16(0x00ff);
+ 	map(0x150000, 0x15000f).mirror(0x00fff0).rw(m_iochip[1], FUNC(cxd1095_device::read), FUNC(cxd1095_device::write)).umask16(0x00ff);
+ 	map(0x160000, 0x16ffff).w(FUNC(segaxbd_state::iocontrol_w));
++	map(0x170001, 0x170001).w(FUNC(segaxbd_state::aburner2_native_w)); // custom ROM feedback mailbox
+ 	map(0x200000, 0x27ffff).rom().region("subcpu", 0x00000);
+ 	map(0x280000, 0x283fff).mirror(0x01c000).ram().share("subram0");
+ 	map(0x2a0000, 0x2a3fff).mirror(0x01c000).ram().share("subram1");
+@@ -1219,7 +1298,7 @@
+ 	PORT_DIPSETTING(    0x00, "Free Play (if Coin A too) or 1/1" )
+ 
+ 	PORT_MODIFY("mainpcb:IO1PORTD")
+-	PORT_DIPNAME( 0x03, 0x01, "Cabinet Type" ) PORT_DIPLOCATION("SWB:1,2")
++	PORT_DIPNAME( 0x03, 0x03, "Cabinet Type" ) PORT_DIPLOCATION("SWB:1,2")
+ 	PORT_DIPSETTING(    0x03, "Moving Deluxe" )
+ 	PORT_DIPSETTING(    0x02, "Moving Standard" )
+ 	PORT_DIPSETTING(    0x01, "Upright 1" )
+@@ -4682,6 +4761,8 @@
+ 
+ void segaxbd_state::install_aburner2(void)
+ {
++	m_ab_active=true;
++	m_ab_gloc = m_maincpu->space(AS_PROGRAM).read_dword(0x3eff0)==0x4142474c && m_maincpu->space(AS_PROGRAM).read_dword(0x3eff4)==0x4f433031;
+ 	m_road_priority = 0;
+ }
+ 
+--- a/src/mame/sega/segaxbd.h
++++ b/src/mame/sega/segaxbd.h
+@@ -48,6 +48,13 @@
+ 	// custom I/O
+ 	uint8_t aburner2_motor_r();
+ 	void aburner2_motor_w(uint8_t data);
++	void aburner2_native_w(uint8_t data);
++	void aburner2_motion_tick();
++	uint8_t aburner2_limits() const;
++	double m_ab_position[2] = {128.0,128.0};
++	uint8_t m_ab_native = 0x88;
++	bool m_ab_gloc = false;
++	bool m_ab_active = false;
+ 	uint8_t smgp_motor_r();
+ 	void smgp_motor_w(uint8_t data);
+ 	uint8_t lastsurv_port_r();

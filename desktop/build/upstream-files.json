@@ -1,0 +1,12 @@
+{
+  "src/mame/sega/segaxbd.cpp": "0ef5567664601a984913f3c7c002ad337fe567fb30ace8d1e65142351fdd3535",
+  "src/mame/sega/segaxbd.h": "ddff9080d2cfca62ab18d5c65e99638c5fbd46e20e7e96d0104ab2925b2ba726",
+  "src/mame/sega/segahang.cpp": "4e9c300183c7a24e68982bff830cd4ed4ffe591463a430b23cedf81e93d1820a",
+  "src/mame/sega/segahang.h": "fb6b26ffa6776d866c6fbc162b09c27cb5e377f57b6aba4177a6a8e88d008a9e",
+  "src/mame/sega/model1.cpp": "262bc1128b8ee01ae2953b8a920c84b8cf0e482197a6c77dd4aa70b25546cb1b",
+  "src/mame/sega/segaybd.cpp": "c39c63b29fa4ee3e0909f73991a7453b5a1ff86f7f5e399d6eebc6983febc0e4",
+  "src/mame/sega/segaybd.h": "1caf875415ef166e6fe046d0e08826ea5e317ccf5f8fc91a8bc62e344bf13c8b",
+  "scripts/src/cpu.lua": "143313660832ab9664774a5ea9150b9b5793ad35c315152676dc57035af25c94",
+  "src/mame/mame.lst": "28d627607d70c800c6fe7ae94822a0eecd88bcd3414da79af2b13b63db3dec5c",
+  "src/osd/modules/output/network.cpp": "93d9d135420e3a68217dc9ab7b0f381917e44c70a9b6fb60a269c23d0e44a4c2"
+}

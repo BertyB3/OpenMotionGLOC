@@ -1,0 +1,97 @@
+--- a/src/mame/sega/model1.cpp
++++ b/src/mame/sega/model1.cpp
+@@ -683,8 +683,63 @@
+ 	machine().bookkeeping().coin_counter_w(0, BIT(data, 0));
+ }
+ 
++// OpenMotion browser harness, GPL-2.0-or-later like the combined MAME build.
++#ifdef __EMSCRIPTEN__
++#include <emscripten.h>
++namespace {
++ running_machine *lab_machine=nullptr;
++ int lab_mask=0, lab_x=128, lab_y=128, lab_throttle=128;
++ int lab_frame_number=0, lab_demo_start=-1;
++ void lab_field(running_machine &m,const char *tag,unsigned mask,int value) {
++  auto p=m.root_device().ioport(tag); if(p) { auto f=p->field(mask);if(f)f->set_value(value); }
++ }
++}
++extern "C" {
++ EMSCRIPTEN_KEEPALIVE void lab_input(int mask,int x,int y,int throttle) {
++  lab_mask=mask;lab_x=x;lab_y=y;lab_throttle=throttle;
++ }
++ EMSCRIPTEN_KEEPALIVE void lab_start_flight() {lab_demo_start=lab_frame_number;}
++ EMSCRIPTEN_KEEPALIVE void lab_pause(int pause) {if(lab_machine){if(pause)lab_machine->pause();else lab_machine->resume();}}
++ EMSCRIPTEN_KEEPALIVE void lab_mute(int mute) {if(lab_machine)lab_machine->sound().ui_mute(mute);}
++}
++void model1_lab_frame(running_machine &m) {
++ lab_machine=&m; ++lab_frame_number;
++ int mask=lab_mask, x=lab_x,y=lab_y,throttle=lab_throttle;
++ if(lab_demo_start>=0) {
++  int f=lab_frame_number-lab_demo_start;
++  if(f>=400 && f<430)mask|=1;
++  if(f>=600 && f<630)mask|=2;
++  if(f>=800 && f<830)mask|=4;
++  if(f>=1000 && f<1030)mask|=8;
++  if(f>=1800 && f<2200){if(f%120<10)mask|=16;throttle=180;}
++  if(f>=2200){lab_demo_start=-1;}
++ }
++ lab_field(m,":IN.0",1,mask&1?1:0);
++ lab_field(m,":IN.0",2,mask&2?1:0);
++ lab_field(m,":IN.0",8,mask&4?1:0);
++ lab_field(m,":IN.0",16,mask&8?1:0);
++ lab_field(m,":IN.1",16,mask&16?1:0);
++ lab_field(m,":IN.1",32,mask&32?1:0);
++ lab_field(m,":STICKX",255,x);
++ lab_field(m,":STICKY",255,y);
++ lab_field(m,":THROTTLE",255,throttle);
++ if(lab_frame_number%3==0) {
++  auto &space=m.device<cpu_device>(":maincpu")->space(AS_PROGRAM);
++  const int pitch=int16_t((space.read_byte(0xc007e0)<<8)|space.read_byte(0xc007ea));
++  const int bank=int16_t((space.read_byte(0xc007e2)<<8)|space.read_byte(0xc007ec));
++  const int phase=space.read_byte(0xc007e4);
++  const int sequence=space.read_byte(0xc007e6);
++  const int marker=space.read_byte(0xc007e8);
++  const int native=space.read_byte(0x40f078)^255;
++  EM_ASM({if(Module.onLabFrame)Module.onLabFrame($0,$1,$2,$3,$4,$5,$6,$7);},lab_frame_number,lab_demo_start>=0,pitch,bank,phase,sequence,marker,native);
++ }
++}
++#endif
++
+ void model1_state::wingwar360_outputs_w(uint8_t data)
+ {
++    machine().output().set_value("start_lamp",BIT(data,2));
++    machine().output().set_value("danger_lamp",BIT(data,3));
+ 	// 7654----  unknown (not used?)
+ 	// ----3---  danger lamp
+ 	// -----2--  start lamp
+@@ -719,6 +774,30 @@
+ 
+ void model1_state::r360_w(uint8_t data)
+ {
++    auto *io = memregion("ioboard:iocpu");
++    // v0.3 I/O payload has the W marker initialiser at 0x41c4..; compare
++    // the original guarded payload signature at output entry 0x4000.
++    bool const converted = io && io->bytes() == 0x10000 &&
++        io->base()[0x4000] == 0xf5 && io->base()[0x4001] == 0xc5 &&
++        io->base()[0x4002] == 0xd5 && io->base()[0x4003] == 0xe5 &&
++        io->base()[0x4004] == 0x4f;
++    if (converted) {
++        machine().output().set_value("gloc_command",data);
++        int const value = data & 63;
++        bool const q = (data & 64) != 0;
++        if (data < 128 && value >= 8 && value <= 24) {
++            machine().output().set_value(q ? "gloc_q" : "gloc_r",32-value);
++            machine().output().set_value(q ? "left_motor_position_nor" : "right_motor_position_nor",value);
++        } else if (data < 128 && value >= 33 && value <= 39) {
++            machine().output().set_value(q ? "left_motor_speed" : "right_motor_speed",value-32);
++        }
++        // The original BF/BE etc. protocol remains below for status/throttle.
++        if (data < 128) return;
++    }
++
++#ifdef __EMSCRIPTEN__
++ EM_ASM({if(Module.onMotion)Module.onMotion($0);},data);
++#endif
+ 	/*
+ 	    this uses the feedback board protocol
+ 	    command group B - these seem to be gamestates

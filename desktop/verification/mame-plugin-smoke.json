@@ -1,0 +1,14 @@
+{
+  "mame": "0.276 stock Linux executable",
+  "plugin": "actual MAME Lua callbacks",
+  "bridge": "actual TCP loopback",
+  "pose_source": "synthetic emulator output fixture, not game motion",
+  "observed": {
+    "q": 10,
+    "r": 22,
+    "s": 3,
+    "t": 4
+  },
+  "serial_opened": false,
+  "runtime_errors": false
+}

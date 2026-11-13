@@ -1,0 +1,57 @@
+{
+  "game": "sharrier1",
+  "version": "0.1",
+  "chips": [
+    "epr-7188.ic97",
+    "epr-7184.ic84",
+    "epr-7189.ic98",
+    "epr-7185.ic85",
+    "epr-7190.ic99",
+    "epr-7186.ic86",
+    "epr-7191.ic100",
+    "epr-7187.ic87"
+  ],
+  "chip_size": 32768,
+  "original_crc32": {
+    "epr-7188.ic97": "7c30a036",
+    "epr-7184.ic84": "16deaeb1",
+    "epr-7189.ic98": "40b1309f",
+    "epr-7185.ic85": "ce78045c",
+    "epr-7190.ic99": "f6391091",
+    "epr-7186.ic86": "79b367d7",
+    "epr-7191.ic100": "6171e9d3",
+    "epr-7187.ic87": "70cb72ef"
+  },
+  "patched_crc32": {
+    "epr-7188.ic97": "cec02f4b",
+    "epr-7184.ic84": "7f3826c0",
+    "epr-7189.ic98": "40b1309f",
+    "epr-7185.ic85": "ce78045c",
+    "epr-7190.ic99": "f6391091",
+    "epr-7186.ic86": "79b367d7",
+    "epr-7191.ic100": "c9f16a0c",
+    "epr-7187.ic87": "8ab745bc"
+  },
+  "patches": [
+    {
+      "offset": 11116,
+      "expected": "123900040496",
+      "replacement": "4eb90003fc00"
+    },
+    {
+      "offset": 11384,
+      "expected": "123900040497",
+      "replacement": "4eb90003fc16"
+    },
+    {
+      "offset": 4762,
+      "expected": "4eb900015784",
+      "replacement": "4eb90003fc2c"
+    },
+    {
+      "offset": 261120,
+      "expected": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "replacement": "13c000043f0008f9000000043f021239000404964e7513c000043f0108f9000100043f021239000404974e754eb90001578448e7ff8040e7700072004a7900040408670000780c39000300043f0266000072083900000004007166000060103900043f007e001e39000400809047123900043f0144417e001e3900040083d2470c40fffc6d00000c0c4000046e00000470000c41fffc6d00000c0c4100046e0000047200c1fc000e81fc005b48c0c3fc000e83fc005b48c16000000c423900043f0270007200340194403601d64038026a00000444443a036a0000044445b8456c00000438050c44000e6f00000ec5fc000e85c4c7fc000e87c40642001006430010e24c54440c4400076f000004780741f900043f0430026100004030036100003a103900043f040000004013c00016000130040000006013c00016000113f900043f05001600010004002013c40016000146df4cdf01ff4e757c001c100c4600026c0000047c10bc406700000e6e000008524660000004534610c64e755348474c4f433031"
+    }
+  ]
+}
