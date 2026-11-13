@@ -22,3 +22,17 @@ class PreparationTest(unittest.TestCase):
             self.assertEqual(source.read_bytes(),b'after\n')
 
 if __name__=='__main__':unittest.main()
+
+class CloneParentTest(unittest.TestCase):
+    def test_clone_chain_is_checked_before_compiling(self):
+        names=['gloc','strkfgtr','gforce2gloc','aburner2','sharrierglc','wingwar360']
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);source=root/'src/mame/sega';source.mkdir(parents=True)
+            for name in ['segaybd.cpp','segaxbd.cpp','model1.cpp']:(source/name).write_text('')
+            text='\n'.join('GAME(1985,'+n+',0,placeholder)' for n in names)
+            text+='\nGAME(1985,sharrier,0,placeholder)\nGAME(1985,sharrier1,sharrier,placeholder)\n'
+            path=source/'segahang.cpp'
+            path.write_text(text+'GAME(1985,sharrier1glc,sharrier1,placeholder)\n')
+            with self.assertRaises(ValueError):module.check_clone_parents(root)
+            path.write_text(text+'GAME(1985,sharrier1glc,sharrier,placeholder)\n')
+            module.check_clone_parents(root)

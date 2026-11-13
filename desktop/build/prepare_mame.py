@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import subprocess
+import re
 from pathlib import Path
 
 HERE=Path(__file__).resolve().parent
@@ -16,6 +17,18 @@ def apply_patch(root, patch):
         subprocess.run(['git','-c','core.autocrlf=false','apply',*args],
                        cwd=root,input=payload,check=True)
 
+def check_clone_parents(root):
+    parents={}
+    for name in ['segaybd.cpp','segaxbd.cpp','segahang.cpp','model1.cpp']:
+        source=(Path(root)/'src/mame/sega'/name).read_text(encoding='utf-8')
+        for game,parent in re.findall(r'^\s*GAME[L]?\(\s*[^,]+,\s*(\w+)\s*,\s*(\w+)',source,re.M):
+            parents[game]=parent
+    for game in ['gloc','strkfgtr','gforce2gloc','aburner2','sharrierglc','sharrier1glc','wingwar360']:
+        if game not in parents:raise ValueError('Missing game registration: '+game)
+        parent=parents[game]
+        if parent!='0' and parents.get(parent)!='0':
+            raise ValueError('MAME rejects a clone of a clone: '+game+' -> '+parent)
+
 def prepare(root):
     root=Path(root)
     checks=json.loads((HERE/'upstream-files.json').read_text())
@@ -25,6 +38,7 @@ def prepare(root):
             raise ValueError('Not pristine MAME 0.276: '+name)
     for patch in sorted((HERE.parent/'patches').glob('*.patch')):
         apply_patch(root,patch)
+    check_clone_parents(root)
     shutil.copyfile(HERE/'network.cpp',root/'src/osd/modules/output/network.cpp')
     print('Installed Open Motion desktop drivers and ordered loopback output transport.')
 

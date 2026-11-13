@@ -65,12 +65,32 @@ jobs:
           msystem: MINGW64
           update: true
           install: make mingw-w64-x86_64-python mingw-w64-x86_64-gcc mingw-w64-x86_64-pkgconf
+      - name: Identify compiler environment
+        id: toolchain
+        shell: msys2 {0}
+        run: echo "digest=$(pacman -Q | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: build-cache
+        with:
+          path: mame-mame0276/build
+          key: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('desktop/patches/**', 'desktop/build/network.cpp') }}
+          restore-keys: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-
       - name: Compile custom MAME for Windows x64
+        id: compile
         shell: msys2 {0}
         run: |
           export MINGW64=/mingw64 MINGW32=
           cd mame-mame0276
-          make PTR64=1 SUBTARGET=openmotion SOURCES=src/mame/sega/segaybd.cpp,src/mame/sega/segaxbd.cpp,src/mame/sega/segahang.cpp,src/mame/sega/model1.cpp REGENIE=1 SYMBOLS=0 OPTIMIZE=2 NOWERROR=1 -j4
+          make PTR64=1 SUBTARGET=openmotion SOURCES=src/mame/sega/segaybd.cpp,src/mame/sega/segaxbd.cpp,src/mame/sega/segahang.cpp,src/mame/sega/model1.cpp REGENIE=1 SYMBOLS=0 OPTIMIZE=2 NOWERROR=1 -j4 2>&1 | tee ../mame-build.log
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.compile.outcome == 'success' && steps.build-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: mame-mame0276/build
+          key: windows-mame0276-opt2-${{ steps.toolchain.outputs.digest }}-${{ hashFiles('desktop/patches/**', 'desktop/build/network.cpp') }}
+      - name: Validate game registrations
+        shell: msys2 {0}
+        run: |
+          cd mame-mame0276
           for game in gloc strkfgtr gforce2gloc aburner2 sharrierglc sharrier1glc wingwar360; do ./openmotion.exe -validate "$game"; done
           ./openmotion.exe -listfull > ../emulator-games.txt
       - name: Package emulator and ROM patches separately
@@ -86,7 +106,16 @@ jobs:
           Get-ChildItem ${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libgcc_s_seh-1.dll,${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libstdc++-6.dll,${{ steps.msys.outputs.msys2-location }}/mingw64/bin/libwinpthread-1.dll -ErrorAction SilentlyContinue | Copy-Item -Destination emulator-payload/
           python desktop/build/package.py emulator emulator-payload OpenMotion-MAME-0.276-v0.1.zip --version 0.1.0 --executable openmotion.exe
           python desktop/build/package.py rom_patch desktop/rom-patches OpenMotion-Frozen-ROM-Patches.zip --version 2026.11.13
+      - uses: actions/upload-artifact@v4
+        if: ${{ failure() }}
+        with:
+          name: OpenMotion-emulator-build-diagnostics
+          path: |
+            mame-build.log
+            mame-mame0276/openmotion.exe
+          retention-days: 7
       - name: Package corresponding MAME source
+        if: ${{ always() && steps.compile.outcome == 'success' }}
         shell: pwsh
         run: |
           Remove-Item mame-mame0276/build -Recurse -Force
@@ -101,6 +130,7 @@ jobs:
             emulator-games.txt
           retention-days: 30
       - uses: actions/upload-artifact@v4
+        if: ${{ always() && steps.compile.outcome == 'success' }}
         with:
           name: OpenMotion-MAME-corresponding-source
           path: OpenMotion-MAME-0.276-corresponding-source.tar.gz
