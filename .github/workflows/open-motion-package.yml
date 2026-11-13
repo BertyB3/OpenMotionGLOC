@@ -64,9 +64,9 @@ jobs:
           '@ | Set-Content portable/OpenMotion/START-HERE.txt
           Copy-Item portable/OpenMotion/START-HERE.txt portable/OpenMotion/README.txt
           Remove-Item portable/OpenMotion/README.md
-          Compress-Archive -Path portable/OpenMotion -DestinationPath OpenMotion_GLOC_Windows_Test_v0_1.zip
+          Copy-Item .github/runtime-licenses portable/OpenMotion/licenses -Recurse
       - uses: actions/upload-artifact@v4
         with:
           name: OpenMotion_GLOC_Windows_Test_v0_1
-          path: OpenMotion_GLOC_Windows_Test_v0_1.zip
+          path: portable/OpenMotion
           retention-days: 30
