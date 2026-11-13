@@ -26,6 +26,7 @@ class Bridge:
         self.last_frame = None
         self.last_frame_at = 0.0
         self.last_tx_at = 0.0
+        self.last_lamps = None
         self.tx = 'None'
         self.rx = 'None'
         self.reason = 'Waiting for emulator'
@@ -63,13 +64,24 @@ class Bridge:
                     self.serial = device
             try:
                 self.write(b'MODESx')
-                self.write(Pose().serial())
+                self.write_pose(Pose(), force_lamps=True)
             except Exception:
                 self.disconnect_serial()
                 raise
             self.armed = True
             self.reason = 'Motion enabled; physical position unverified'
             self.record('motion', 'enabled')
+
+    def write_pose(self, pose, force_lamps=False):
+        packet=pose.serial(include_lamps=False)
+        lamps=(pose.a,pose.b)
+        # v55 treats A1 as an acknowledgement for its start/stop latch. Match
+        # MAMEHooker's change notifications rather than replaying A1 as heartbeat.
+        for i,command in enumerate(('A','B')):
+            if force_lamps or self.last_lamps is None or lamps[i]!=self.last_lamps[i]:
+                packet+=f'{command}{lamps[i]}x'.encode('ascii')
+        self.write(packet)
+        self.last_lamps=lamps
 
     def write(self, packet):
         count = self.serial.write(packet)
@@ -85,7 +97,7 @@ class Bridge:
             self.reason = reason
             if self.serial is not None:
                 try:
-                    self.write(Pose().serial())
+                    self.write_pose(Pose(), force_lamps=True)
                 except Exception as e:
                     self.record('serial_error', str(e))
                     self.reason = f'{reason}; centre write failed'
@@ -137,7 +149,7 @@ class Bridge:
                     self.disable('Game output lost; motion disabled')
                 elif now-self.last_tx_at >= 0.05:
                     try:
-                        self.write(self.pose.serial())
+                        self.write_pose(self.pose)
                     except Exception as e:
                         self.disable('Controller write failed: ' + str(e))
             if self.serial is not None:

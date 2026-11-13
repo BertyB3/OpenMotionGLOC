@@ -53,7 +53,24 @@ class BridgeTest(unittest.TestCase):
     def test_enable_selects_serial_then_centre_then_pose(self):
         self.ready();self.b.enable();self.assertEqual(self.serial.packets[:2],[b'MODESx',Pose().serial()])
         self.b.tick(self.b.last_tx_at+0.06)
-        self.assertEqual(self.serial.packets[-1],Pose(10,22,3,4).serial())
+        self.assertEqual(self.serial.packets[-1],Pose(10,22,3,4).serial(include_lamps=False))
+    def test_lamp_acknowledgement_is_not_replayed_as_heartbeat(self):
+        self.ready();self.b.enable()
+        self.b.handle('om_packet',str(Pose(10,22,3,4,1,0).pack()))
+        self.b.tick(self.b.last_tx_at+0.06)
+        self.assertTrue(self.serial.packets[-1].endswith(b'A1x'))
+        self.b.tick(self.b.last_tx_at+0.06)
+        self.assertEqual(self.serial.packets[-1],Pose(10,22,3,4).serial(include_lamps=False))
+        self.assertEqual(b''.join(self.serial.packets).count(b'A1x'),1)
+    def test_lamp_off_edge_and_disconnect_are_sent(self):
+        self.ready();self.b.enable()
+        self.b.handle('om_packet',str(Pose(10,22,3,4,1,1).pack()))
+        self.b.tick(self.b.last_tx_at+0.06)
+        self.b.handle('om_packet',str(Pose(10,22,3,4,0,1).pack()))
+        self.b.tick(self.b.last_tx_at+0.06)
+        self.assertTrue(self.serial.packets[-1].endswith(b'A0x'))
+        self.assertNotIn(b'B1x',self.serial.packets[-1])
+        self.b.disable();self.assertEqual(self.serial.packets[-1],Pose().serial())
     def test_pause_centres_and_disarms(self):
         self.ready();self.b.enable();self.b.handle('om_paused','1')
         self.assertFalse(self.b.armed);self.assertTrue(self.serial.closed)

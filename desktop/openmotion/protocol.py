@@ -26,9 +26,11 @@ class Pose:
     def pack(self):
         return self.q | self.r << 6 | self.s << 12 | self.t << 15 | self.a << 18 | self.b << 19 | 1 << 20
 
-    def serial(self):
+    def serial(self, include_lamps=True):
         # Speeds precede new targets. Whole frame is one ordered serial write.
-        return f'S{self.s}xT{self.t}xQ{self.q}xR{self.r}xA{self.a}xB{self.b}x'.encode('ascii')
+        packet=f'S{self.s}xT{self.t}xQ{self.q}xR{self.r}x'
+        if include_lamps:packet+=f'A{self.a}xB{self.b}x'
+        return packet.encode('ascii')
 
 class Lines:
     """Consume CR, LF and CRLF across arbitrary TCP fragment boundaries."""
